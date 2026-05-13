@@ -1,0 +1,146 @@
+/* SPDX-License-Identifier: GPL-2.0 */
+/*
+ * Kernel version compatibility layer for netdevsim DKMS package.
+ *
+ * The DKMS sources originate from Linux 6.9.5.  This header provides
+ * shims so the same source tree compiles against 6.8.x kernels
+ * (ubuntu-22.04 runners).
+ *
+ * Each compat block is guarded by LINUX_VERSION_CODE so the module
+ * builds cleanly on the native 6.9.x tree as well.
+ */
+
+#ifndef _DKMS_COMPAT_H_
+#define _DKMS_COMPAT_H_
+
+#include "nsim_rename.h"
+#include <linux/version.h>
+
+/*
+ * ---- posix_clock_context (PTP chardev) ------------------------------------
+ *
+ * struct posix_clock_context was introduced in v6.8 to carry per-fd
+ * private data through the posix-clock file operations.  Kernels < 6.8
+ * pass a bare struct posix_clock * to open/read/ioctl/poll/release.
+ *
+ * We define a pair of accessor macros so ptp_chardev.c can be written
+ * once and compiled for both worlds.  The actual function signatures are
+ * selected via #if in ptp_private.h and ptp_chardev.c.
+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+  #define HAVE_POSIX_CLOCK_CONTEXT	1
+#endif
+
+/*
+ * ---- PTP_CLOCK_EXTOFF -----------------------------------------------------
+ *
+ * PTP_CLOCK_EXTOFF (external-timestamp-as-offset) was added in v6.9.
+ * Guard any code that handles this event type.
+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
+  #define HAVE_PTP_CLOCK_EXTOFF		1
+#endif
+
+/*
+ * ---- PTP_EXTTS_EVENT_VALID / PTP_EXT_OFFSET flags -------------------------
+ *
+ * These flags on struct ptp_extts_event were added together with EXTOFF.
+ */
+#ifndef PTP_EXTTS_EVENT_VALID
+  #define PTP_EXTTS_EVENT_VALID		0
+  #define PTP_EXT_OFFSET		0
+#endif
+
+/*
+ * ---- DPLL const-qualified device/pin ops ----------------------------------
+ *
+ * Starting with v6.8 the DPLL device-ops and pin-ops callbacks receive
+ * const-qualified pointers to struct dpll_device / struct dpll_pin.
+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+  #define DPLL_DEVICE_CONST	const
+  #define DPLL_PIN_CONST	const
+#else
+  #define DPLL_DEVICE_CONST
+  #define DPLL_PIN_CONST
+#endif
+
+/*
+ * ---- dpll_lock_status_error -----------------------------------------------
+ *
+ * The status_error out-param in lock_status_get was added in v6.9.
+ * On 6.8.x, the callback has no status_error parameter and the enum
+ * does not exist.
+ */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 9, 0)
+  #define DPLL_NO_LOCK_STATUS_ERROR	1
+  #ifndef DPLL_LOCK_STATUS_ERROR_NONE
+    enum dpll_lock_status_error {
+	DPLL_LOCK_STATUS_ERROR_NONE = 0,
+	DPLL_LOCK_STATUS_ERROR_UNDEFINED,
+    };
+  #endif
+#endif
+
+/*
+ * ---- genlmsg_multicast_allns compat ---------------------------------------
+ *
+ * On 6.8 the signature is (family, skb, portid, flags) — no group param.
+ * On 6.9+ it is (family, skb, portid, group, flags).
+ * Provide a wrapper that drops the group arg on 6.8.
+ */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 9, 0)
+#include <net/genetlink.h>
+#define genlmsg_multicast_allns(family, skb, portid, group, flags) \
+	(genlmsg_multicast_allns)(family, skb, portid, flags)
+#endif
+
+/*
+ * ---- nla_put_sint ---------------------------------------------------------
+ *
+ * nla_put_sint() was added in v6.7 (net-next).  Provide a simple
+ * fallback for kernels that lack it.
+ */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 7, 0)
+#include <net/netlink.h>
+static inline int nla_put_sint(struct sk_buff *msg, int attrtype, s64 value)
+{
+	if (value >= S32_MIN && value <= S32_MAX)
+		return nla_put_s32(msg, attrtype, (s32)value);
+	return nla_put_64bit(msg, attrtype, sizeof(value),
+			     &value, attrtype + 1);
+}
+#endif
+
+/*
+ * ---- cyclecounter const qualifier -----------------------------------------
+ *
+ * Commit e78f70bad29c ("time/timecounter: Fix the lie that struct
+ * cyclecounter is const"), merged in v6.14, removed the const from
+ * the cyclecounter.read callback and from container_of users.
+ * Needed for ubuntu-22.04 whose kernel (6.8.x) still has const.
+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 14, 0)
+  #define CYCLECOUNTER_READ_CONST
+#else
+  #define CYCLECOUNTER_READ_CONST	const
+#endif
+
+/*
+ * ---- ptp_clock_freerun ----------------------------------------------------
+ *
+ * Older kernels (< 6.9) do not expose ptp_clock_freerun() or the
+ * has_cycles field.  The concept of preventing settime on a clock whose
+ * vclocks are active is still present, but spelled differently.
+ * For DKMS purposes we simply allow settime when the helper is missing
+ * because mock clocks have no real vclock users.
+ */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 9, 0)
+  #ifndef ptp_clock_freerun
+    /* Forward-declare; the implementation lives in ptp_private.h which
+     * includes this header indirectly.  If the kernel already provides it
+     * this define will be harmless. */
+  #endif
+#endif
+
+#endif /* _DKMS_COMPAT_H_ */

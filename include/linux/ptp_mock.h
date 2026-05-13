@@ -1,0 +1,65 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+/*
+ * Mock-up PTP Hardware Clock driver for virtual network devices
+ *
+ * Copyright 2023 NXP
+ */
+
+#ifndef _PTP_MOCK_H_
+#define _PTP_MOCK_H_
+
+#include <linux/ptp_clock_kernel.h>
+#include <linux/kref.h>
+#include <linux/hrtimer.h>
+
+struct device;
+struct mock_phc {
+	struct ptp_clock_info info;
+	struct ptp_clock *clock;
+	struct timecounter tc;
+	struct cyclecounter cc;
+	int logical_clk_id;
+	struct kref ref;
+	spinlock_t lock;
+	/*
+	 * Two pins: index 0 unused, index 1 "GNSS1PPS" — matches common NIC
+	 * layouts and ts2phc defaults (e.g. ts2phc.pin_index 1 on ens1f0).
+	 */
+	struct ptp_pin_desc pins[2];
+	/* EXTTS (1PPS) simulation */
+	struct hrtimer extts_timer;
+	bool extts_enabled;
+	int extts_channel;
+};
+
+#if IS_ENABLED(CONFIG_PTP_1588_CLOCK_MOCK)
+
+struct mock_phc *mock_phc_create(struct device *dev, int logical_clk_id);
+int mock_phc_index(struct mock_phc *phc);
+int mock_phc_logical_clk_id(struct mock_phc *phc);	
+void mock_phc_release(struct mock_phc *phc);
+
+struct ptp_clock_info *mock_phc_get_ptp_info(struct mock_phc *phc);
+#else
+struct ptp_clock_info *mock_phc_get_ptp_info(struct mock_phc *phc)
+{
+  return NULL;
+}
+
+static inline struct mock_phc *mock_phc_create(struct device *dev, int logical_clk_id)
+{
+	return NULL;
+}
+
+static inline void mock_phc_destroy(struct mock_phc *phc)
+{
+}
+
+static inline int mock_phc_index(struct mock_phc *phc)
+{
+	return -1;
+}
+
+#endif
+
+#endif /* _PTP_MOCK_H_ */

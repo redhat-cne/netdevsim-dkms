@@ -1,0 +1,130 @@
+# netdevsim DKMS Driver
+
+Out-of-tree DKMS package for the enhanced **netdevsim** kernel module with
+fake PCI device simulation, DPLL/GNSS emulation, PTP EXTTS support, and
+logical clock ID sharing.
+
+Based on Linux 6.9.5 kernel sources.
+
+## Modules Included
+
+| Module | Description |
+|--------|-------------|
+| `netdevsim.ko` | Enhanced netdevsim with fake PCI, DPLL, ethtool, logical clock IDs |
+| `nsim_ptp_mock.ko` | Mock PTP clock with kref lifecycle, 2-pin layout, EXTTS simulation |
+| `nsim_ptp.ko` | PTP core with `nsim_ptp_class` export and `get_ptp_clock_info()` helper |
+| `nsim_dpll.ko` | DPLL subsystem with `genlmsg_multicast_allns` for cross-namespace events |
+
+> **Note:** Modules are renamed from the upstream names (`ptp` → `nsim_ptp`,
+> `dpll` → `nsim_dpll`, `ptp_mock` → `nsim_ptp_mock`) to avoid symbol
+> conflicts with the kernel's built-in PTP and DPLL subsystems.
+
+## Kernel Compatibility
+
+This package targets **Linux 6.9.x** kernels. Internal kernel APIs (devlink,
+dpll, netdevice, PTP) may differ in other kernel versions. Building against a
+substantially different kernel version will likely require source modifications.
+
+## Prerequisites
+
+- `dkms` package installed
+- Kernel headers for the target kernel (`linux-headers-$(uname -r)`)
+
+## Installation
+
+### Using DKMS (recommended)
+
+```bash
+# Copy source tree to the DKMS source directory
+sudo cp -r . /usr/src/netdevsim-6.9.5
+
+# Register and build
+sudo dkms add netdevsim/6.9.5
+sudo dkms build netdevsim/6.9.5
+sudo dkms install netdevsim/6.9.5
+```
+
+### Manual build (without DKMS)
+
+```bash
+make
+sudo make modules_install
+```
+
+## Uninstallation
+
+```bash
+sudo dkms remove netdevsim/6.9.5 --all
+sudo rm -rf /usr/src/netdevsim-6.9.5
+```
+
+## Loading the modules
+
+Load the modules in dependency order:
+
+```bash
+sudo modprobe nsim_ptp
+sudo modprobe nsim_dpll
+sudo modprobe netdevsim pci_bus_nr=0x1f
+```
+
+## udev Rule
+
+Install the udev rule to create `/dev/ptp*` compat symlinks:
+
+```bash
+sudo cp 99-nsim-ptp.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules
+```
+
+The `nsim_ptp` module registers a separate device class (`/dev/nsim_ptp*`)
+to avoid colliding with the kernel's built-in PTP subsystem. The udev rule
+creates standard `/dev/ptpN` symlinks so that `ethtool -T` PHC indices
+resolve correctly for `ptp4l` and other linuxptp tools.
+
+## Usage
+
+Create netdevsim devices via the bus interface:
+
+```bash
+# Format: "id pci_addr clk_id [num_ports]"
+echo "1 0000:1f:02.0 1 2" | sudo tee /sys/bus/netdevsim/new_device
+```
+
+The `pci_bus_nr` module parameter controls the fake PCI host bridge bus:
+
+```bash
+sudo modprobe netdevsim pci_bus_nr=0x1f
+```
+
+Link two netdevsim interfaces as peers (required for packet forwarding):
+
+```bash
+exec 3< /proc/self/ns/net
+IF0_IDX=$(cat /sys/class/net/eth0/ifindex)
+IF1_IDX=$(cat /sys/class/net/eth1/ifindex)
+echo "3:${IF0_IDX} 3:${IF1_IDX}" > /sys/bus/netdevsim/link_device
+exec 3<&-
+```
+
+## Container / Kubernetes Notes
+
+When using netdevsim inside containers or Kubernetes pods:
+
+- **Device permissions:** The `nsim_ptp` char devices use a non-standard
+  major number (234) that may be blocked by cgroup device allowlists. The
+  udev rule sets `MODE="0666"` to work around this. If devices were created
+  before the rule was installed, run `chmod 666 /dev/nsim_ptp*`.
+
+- **Systemd services:** Services with `DevicePolicy=closed` only allow
+  `char-ptp` class devices. Override with a drop-in:
+  `DeviceAllow=char-* rw` and `DevicePolicy=auto`.
+
+- **Kubernetes pods:** The `/dev/ptp*` symlinks from the udev rule
+  propagate to kind node containers but NOT into Kubernetes pods. The
+  actual `/dev/nsim_ptp*` device nodes do appear in pods. Create the
+  symlinks inside pods: `for i in 0 1 2 ...; do ln -sf nsim_ptp$i /dev/ptp$i; done`
+
+## License
+
+GPL-2.0

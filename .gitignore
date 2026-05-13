@@ -1,0 +1,31 @@
+# Build artifacts
+*.o
+*.ko
+*.ko.cmd
+*.mod
+*.mod.c
+*.mod.cmd
+*.order
+*.symvers
+*.unsigned
+*.o.d
+.tmp_versions/
+.cache.mk
+modules.order
+Module.symvers
+
+# RPM build
+rpmbuild/
+*.tar.gz
+*.rpm
+
+# Editor/IDE
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

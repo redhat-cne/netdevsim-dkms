@@ -1,0 +1,13 @@
+# Create /dev/ptp* compat symlinks for nsim_ptp devices so that
+# linuxptp tools (ptp4l, phc2sys, ts2phc) find clocks at the
+# standard path reported by ethtool -T.
+#
+# The nsim_ptp module registers a separate device class to avoid
+# colliding with the kernel's built-in PTP subsystem, but ethtool
+# still reports integer PHC indices that userspace maps to /dev/ptpN.
+#
+# MODE="0666" is needed because the non-standard major number (234)
+# is not in the default cgroup device allowlist; containers and
+# systemd-sandboxed services (DevicePolicy=closed) would get
+# "Operation not permitted" without world-readable permissions.
+SUBSYSTEM=="nsim_ptp", KERNEL=="nsim_ptp[0-9]*", MODE="0666", SYMLINK+="ptp%n"
