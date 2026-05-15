@@ -19,7 +19,11 @@ jobs:
   # DKMS build + smoke tests (every PR and workflow_dispatch)
   # ------------------------------------------------------------------
   dkms-test:
-    runs-on: ubuntu-22.04
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
     steps:
       - name: Runner info
         run: |
@@ -121,7 +125,8 @@ jobs:
       - name: Summary
         if: always()
         run: |
-          echo "## DKMS Smoke Tests" >> "$GITHUB_STEP_SUMMARY"
+          echo "## DKMS Smoke Tests (${{ matrix.os }})" >> "$GITHUB_STEP_SUMMARY"
+          echo "- OS: ${{ matrix.os }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- Kernel: $(uname -r)" >> "$GITHUB_STEP_SUMMARY"
           echo "- Build: ${{ steps.build.outputs.status || 'unknown' }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- Load: ${{ steps.load.outputs.load_ok || 'false' }}" >> "$GITHUB_STEP_SUMMARY"

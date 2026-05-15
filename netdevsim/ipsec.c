@@ -125,17 +125,22 @@ static int nsim_ipsec_parse_proto_keys(struct xfrm_state *xs,
 	return 0;
 }
 
+#ifdef HAVE_XFRMDEV_OPS_DEV_PARAM
+static int nsim_ipsec_add_sa(struct net_device *dev,
+			     struct xfrm_state *xs,
+			     struct netlink_ext_ack *extack)
+{
+#else
 static int nsim_ipsec_add_sa(struct xfrm_state *xs,
 			     struct netlink_ext_ack *extack)
 {
+	struct net_device *dev = xs->xso.real_dev;
+#endif
 	struct nsim_ipsec *ipsec;
-	struct net_device *dev;
 	struct netdevsim *ns;
 	struct nsim_sa sa;
 	u16 sa_idx;
 	int ret;
-
-	dev = xs->xso.real_dev;
 	ns = netdev_priv(dev);
 	ipsec = &ns->ipsec;
 
@@ -197,9 +202,15 @@ static int nsim_ipsec_add_sa(struct xfrm_state *xs,
 	return 0;
 }
 
+#ifdef HAVE_XFRMDEV_OPS_DEV_PARAM
+static void nsim_ipsec_del_sa(struct net_device *dev, struct xfrm_state *xs)
+{
+	struct netdevsim *ns = netdev_priv(dev);
+#else
 static void nsim_ipsec_del_sa(struct xfrm_state *xs)
 {
 	struct netdevsim *ns = netdev_priv(xs->xso.real_dev);
+#endif
 	struct nsim_ipsec *ipsec = &ns->ipsec;
 	u16 sa_idx;
 
