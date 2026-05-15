@@ -228,6 +228,15 @@ jobs:
           fi
           podman --version
 
+      - name: Install OpenShift CLI (oc)
+        run: |
+          if ! command -v oc &>/dev/null; then
+            curl -sLO https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux.tar.gz
+            sudo tar xzf openshift-client-linux.tar.gz -C /usr/local/bin oc kubectl
+            rm -f openshift-client-linux.tar.gz
+          fi
+          oc version --client
+
       - name: Install DKMS dependencies
         run: |
           sudo apt-get install -y dkms gcc make ethtool linuxptp \
