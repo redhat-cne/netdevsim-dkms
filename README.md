@@ -125,6 +125,43 @@ When using netdevsim inside containers or Kubernetes pods:
   actual `/dev/nsim_ptp*` device nodes do appear in pods. Create the
   symlinks inside pods: `for i in 0 1 2 ...; do ln -sf nsim_ptp$i /dev/ptp$i; done`
 
+## Local Testing with UTM (macOS)
+
+The `scripts/test-utm-ubuntu.sh` script spins up a disposable Ubuntu VM via
+[UTM](https://mac.getutm.app), installs the DKMS package, loads the modules,
+and runs smoke tests.
+
+### Prerequisites
+
+1. Install UTM from https://mac.getutm.app or `brew install --cask utm`.
+2. Symlink `utmctl` so it's on your PATH:
+
+```bash
+sudo ln -sf /Applications/UTM.app/Contents/MacOS/utmctl /usr/local/bin/utmctl
+```
+
+### Usage
+
+```bash
+# Ubuntu 22.04 (kernel 6.8 HWE)
+./scripts/test-utm-ubuntu.sh --release 22.04 --skip-ptp-operator --shell
+
+# Ubuntu 24.04 (kernel 6.17 HWE)
+./scripts/test-utm-ubuntu.sh --release 24.04 --skip-ptp-operator --shell
+```
+
+The `--shell` flag drops you into an SSH session after the tests pass.
+Use `--skip-ptp-operator` to only run the DKMS build and smoke tests.
+
+### Managing the VM
+
+```bash
+utmctl list                              # list VMs
+utmctl ip-address netdevsim-ubuntu-test  # get VM IP
+utmctl stop netdevsim-ubuntu-test        # stop VM
+utmctl delete netdevsim-ubuntu-test      # delete VM
+```
+
 ## License
 
 GPL-2.0
