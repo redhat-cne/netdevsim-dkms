@@ -19,7 +19,11 @@ jobs:
   # DKMS build + smoke tests (every PR and workflow_dispatch)
   # ------------------------------------------------------------------
   dkms-test:
-    runs-on: ubuntu-22.04
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
     steps:
       - name: Runner info
         run: |
@@ -121,7 +125,8 @@ jobs:
       - name: Summary
         if: always()
         run: |
-          echo "## DKMS Smoke Tests" >> "$GITHUB_STEP_SUMMARY"
+          echo "## DKMS Smoke Tests (${{ matrix.os }})" >> "$GITHUB_STEP_SUMMARY"
+          echo "- OS: ${{ matrix.os }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- Kernel: $(uname -r)" >> "$GITHUB_STEP_SUMMARY"
           echo "- Build: ${{ steps.build.outputs.status || 'unknown' }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- Load: ${{ steps.load.outputs.load_ok || 'false' }}" >> "$GITHUB_STEP_SUMMARY"
@@ -189,14 +194,15 @@ jobs:
   ptp-test:
     if: github.event_name == 'workflow_dispatch'
     needs: ptp-images
-    runs-on: ubuntu-22.04
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
         mode: [oc, bc, dualnicbc, dualnicbcha, dualfollower]
     steps:
-      - name: "Runner info (${{ matrix.mode }})"
+      - name: "Runner info (${{ matrix.os }} / ${{ matrix.mode }})"
         run: |
           echo "CPUs: $(nproc)"
           echo "RAM: $(free -h | awk '/Mem:/{print $2}')"
@@ -207,15 +213,29 @@ jobs:
       - name: Install latest podman
         run: |
           . /etc/os-release
-          sudo mkdir -p /etc/apt/keyrings
-          curl -fsSL "https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/unstable/xUbuntu_${VERSION_ID}/Release.key" \
-            | sudo gpg --dearmor --yes -o /etc/apt/keyrings/devel_kubic_libcontainers_unstable.gpg
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/devel_kubic_libcontainers_unstable.gpg] \
-            https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/unstable/xUbuntu_${VERSION_ID}/ /" \
-            | sudo tee /etc/apt/sources.list.d/devel:kubic:libcontainers:unstable.list >/dev/null
-          sudo apt-get update
-          sudo apt-get install -y podman
+          if [[ "${VERSION_ID}" == "22.04" ]]; then
+            sudo mkdir -p /etc/apt/keyrings
+            curl -fsSL "https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/unstable/xUbuntu_${VERSION_ID}/Release.key" \
+              | sudo gpg --dearmor --yes -o /etc/apt/keyrings/devel_kubic_libcontainers_unstable.gpg
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/devel_kubic_libcontainers_unstable.gpg] \
+              https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/unstable/xUbuntu_${VERSION_ID}/ /" \
+              | sudo tee /etc/apt/sources.list.d/devel:kubic:libcontainers:unstable.list >/dev/null
+            sudo apt-get update
+            sudo apt-get install -y podman
+          else
+            sudo apt-get update
+            sudo apt-get install -y podman
+          fi
           podman --version
+
+      - name: Install OpenShift CLI (oc)
+        run: |
+          if ! command -v oc &>/dev/null; then
+            curl -sLO https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux.tar.gz
+            sudo tar xzf openshift-client-linux.tar.gz -C /usr/local/bin oc kubectl
+            rm -f openshift-client-linux.tar.gz
+          fi
+          oc version --client
 
       - name: Install DKMS dependencies
         run: |
@@ -276,7 +296,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ptp-artifacts-${{ matrix.mode }}
+          name: ptp-artifacts-${{ matrix.os }}-${{ matrix.mode }}
           path: /tmp/artifacts/
           if-no-files-found: ignore
 
@@ -292,5 +312,6 @@ jobs:
       - name: Summary
         if: always()
         run: |
-          echo "## ptp-operator: ${{ matrix.mode }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "## ptp-operator: ${{ matrix.os }} / ${{ matrix.mode }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- OS: ${{ matrix.os }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- Kernel: $(uname -r)" >> "$GITHUB_STEP_SUMMARY"

@@ -3,8 +3,8 @@
  * Kernel version compatibility layer for netdevsim DKMS package.
  *
  * The DKMS sources originate from Linux 6.9.5.  This header provides
- * shims so the same source tree compiles against 6.8.x kernels
- * (ubuntu-22.04 runners).
+ * shims so the same source tree compiles against both 6.8.x (Ubuntu
+ * 22.04) and 6.17.x (Ubuntu 24.04 HWE) kernels.
  *
  * Each compat block is guarded by LINUX_VERSION_CODE so the module
  * builds cleanly on the native 6.9.x tree as well.
@@ -44,9 +44,12 @@
 /*
  * ---- PTP_EXTTS_EVENT_VALID / PTP_EXT_OFFSET flags -------------------------
  *
- * These flags on struct ptp_extts_event were added together with EXTOFF.
+ * These flags on struct ptp_extts_event were added together with EXTOFF
+ * in v6.9.  On 6.8.x they don't exist in the kernel headers so we
+ * define them to 0 (no-ops).  On 6.9+ (including 6.17) the kernel's
+ * uapi/linux/ptp_clock.h already defines them, so we must not redefine.
  */
-#ifndef PTP_EXTTS_EVENT_VALID
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 9, 0)
   #define PTP_EXTTS_EVENT_VALID		0
   #define PTP_EXT_OFFSET		0
 #endif
@@ -85,14 +88,21 @@
 /*
  * ---- genlmsg_multicast_allns compat ---------------------------------------
  *
- * On 6.8 the signature is (family, skb, portid, flags) — no group param.
- * On 6.9+ it is (family, skb, portid, group, flags).
- * Provide a wrapper that drops the group arg on 6.8.
+ * The signature has changed across kernel versions:
+ *   < 6.9:   (family, skb, portid, flags)            — no group
+ *   6.9-6.11: (family, skb, portid, group, flags)    — our 6.9.5 source
+ *   >= 6.12:  (family, skb, portid, group)            — flags removed
+ *
+ * Our source uses the 5-arg form.  Map it to the right kernel signature.
  */
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 9, 0)
 #include <net/genetlink.h>
 #define genlmsg_multicast_allns(family, skb, portid, group, flags) \
 	(genlmsg_multicast_allns)(family, skb, portid, flags)
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
+#include <net/genetlink.h>
+#define genlmsg_multicast_allns(family, skb, portid, group, flags) \
+	(genlmsg_multicast_allns)(family, skb, portid, group)
 #endif
 
 /*
@@ -113,6 +123,30 @@ static inline int nla_put_sint(struct sk_buff *msg, int attrtype, s64 value)
 #endif
 
 /*
+ * ---- hrtimer_init removal -------------------------------------------------
+ *
+ * hrtimer_init() was removed in v6.15 in favour of hrtimer_setup()
+ * which combines initialisation and callback assignment.  Our 6.9.5
+ * source still uses the old two-step pattern:
+ *   hrtimer_init(&t, clock, mode);
+ *   t.function = callback;
+ *
+ * On >= 6.15, provide an inline shim that maps hrtimer_init() to
+ * hrtimer_setup() with a dummy callback; the real callback assignment
+ * on the next line will overwrite it.
+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 15, 0)
+#include <linux/hrtimer.h>
+static enum hrtimer_restart __maybe_unused
+__dkms_hrtimer_dummy(struct hrtimer *t)
+{
+	return HRTIMER_NORESTART;
+}
+#define hrtimer_init(timer, which_clock, mode) \
+	hrtimer_setup(timer, __dkms_hrtimer_dummy, which_clock, mode)
+#endif
+
+/*
  * ---- cyclecounter const qualifier -----------------------------------------
  *
  * Commit e78f70bad29c ("time/timecounter: Fix the lie that struct
@@ -124,6 +158,64 @@ static inline int nla_put_sint(struct sk_buff *msg, int attrtype, s64 value)
   #define CYCLECOUNTER_READ_CONST
 #else
   #define CYCLECOUNTER_READ_CONST	const
+#endif
+
+/*
+ * ---- no_llseek removal ----------------------------------------------------
+ *
+ * no_llseek was removed from <linux/fs.h> in v6.12.  Our fib.c still
+ * references it.  Map to noop_llseek which is equivalent and still exists.
+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
+  #define no_llseek noop_llseek
+#endif
+
+/*
+ * ---- debugfs_real_fops removal / debugfs_get_aux --------------------------
+ *
+ * debugfs_real_fops() was removed in v6.16 as part of the debugfs proxy
+ * refactor.  The replacement pattern uses debugfs_get_aux() with
+ * debugfs_create_file_aux() and struct debugfs_short_fops (added in v6.13).
+ *
+ * hwstats.c uses #ifdef HAVE_DEBUGFS_GET_AUX to select the right API.
+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 16, 0)
+  #define HAVE_DEBUGFS_GET_AUX	1
+#endif
+
+/*
+ * ---- xfrmdev_ops signature change -----------------------------------------
+ *
+ * The xdo_dev_state_add/delete/free callbacks gained an explicit
+ * struct net_device * first parameter in v6.16.
+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 16, 0)
+  #define HAVE_XFRMDEV_OPS_DEV_PARAM	1
+#endif
+
+/*
+ * ---- UDP_TUNNEL_NIC_INFO_MAY_SLEEP removal --------------------------------
+ *
+ * The flag was removed in v6.17 when the UDP tunnel NIC infrastructure
+ * switched from rtnl_lock to a dedicated mutex.  Define it as 0 so
+ * existing code that sets the flag becomes a harmless no-op.
+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 17, 0)
+  #define UDP_TUNNEL_NIC_INFO_MAY_SLEEP	0
+#endif
+
+/*
+ * ---- kernel_ethtool_ts_info -----------------------------------------------
+ *
+ * struct kernel_ethtool_ts_info was introduced in v6.11 as a kernel-only
+ * replacement for struct ethtool_ts_info in the get_ts_info() callback.
+ * Our 6.9.5 source uses the old struct name.  Provide a typedef so the
+ * function signature matches whichever kernel we build against.
+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)
+  #define NSIM_ETHTOOL_TS_INFO struct kernel_ethtool_ts_info
+#else
+  #define NSIM_ETHTOOL_TS_INFO struct ethtool_ts_info
 #endif
 
 /*

@@ -331,7 +331,9 @@ enum nsim_dev_hwstats_do {
 };
 
 struct nsim_dev_hwstats_fops {
+#ifndef HAVE_DEBUGFS_GET_AUX
 	const struct file_operations fops;
+#endif
 	enum nsim_dev_hwstats_do action;
 	enum netdev_offload_xstats_type type;
 };
@@ -342,13 +344,17 @@ nsim_dev_hwstats_do_write(struct file *file,
 			  size_t count, loff_t *ppos)
 {
 	struct nsim_dev_hwstats *hwstats = file->private_data;
-	struct nsim_dev_hwstats_fops *hwsfops;
+	const struct nsim_dev_hwstats_fops *hwsfops;
 	struct list_head *hwsdev_list;
 	int ifindex;
 	int err;
 
+#ifdef HAVE_DEBUGFS_GET_AUX
+	hwsfops = debugfs_get_aux(file);
+#else
 	hwsfops = container_of(debugfs_real_fops(file),
 			       struct nsim_dev_hwstats_fops, fops);
+#endif
 
 	err = kstrtoint_from_user(data, count, 0, &ifindex);
 	if (err)
@@ -381,6 +387,18 @@ nsim_dev_hwstats_do_write(struct file *file,
 	return count;
 }
 
+#ifdef HAVE_DEBUGFS_GET_AUX
+static struct debugfs_short_fops nsim_hwstats_short_fops = {
+	.write = nsim_dev_hwstats_do_write,
+	.llseek = generic_file_llseek,
+};
+
+#define NSIM_DEV_HWSTATS_FOPS(ACTION, TYPE)			\
+	{							\
+		.action = ACTION,				\
+		.type = TYPE,					\
+	}
+#else
 #define NSIM_DEV_HWSTATS_FOPS(ACTION, TYPE)			\
 	{							\
 		.fops = {					\
@@ -392,6 +410,7 @@ nsim_dev_hwstats_do_write(struct file *file,
 		.action = ACTION,				\
 		.type = TYPE,					\
 	}
+#endif
 
 static const struct nsim_dev_hwstats_fops nsim_dev_hwstats_l3_disable_fops =
 	NSIM_DEV_HWSTATS_FOPS(NSIM_DEV_HWSTATS_DO_DISABLE,
@@ -433,12 +452,21 @@ int nsim_dev_hwstats_init(struct nsim_dev *nsim_dev)
 		goto err_remove_hwstats_recursive;
 	}
 
+#ifdef HAVE_DEBUGFS_GET_AUX
+	debugfs_create_file_aux("enable_ifindex", 0200, hwstats->l3_ddir, hwstats,
+				&nsim_dev_hwstats_l3_enable_fops, &nsim_hwstats_short_fops);
+	debugfs_create_file_aux("disable_ifindex", 0200, hwstats->l3_ddir, hwstats,
+				&nsim_dev_hwstats_l3_disable_fops, &nsim_hwstats_short_fops);
+	debugfs_create_file_aux("fail_next_enable", 0200, hwstats->l3_ddir, hwstats,
+				&nsim_dev_hwstats_l3_fail_fops, &nsim_hwstats_short_fops);
+#else
 	debugfs_create_file("enable_ifindex", 0200, hwstats->l3_ddir, hwstats,
 			    &nsim_dev_hwstats_l3_enable_fops.fops);
 	debugfs_create_file("disable_ifindex", 0200, hwstats->l3_ddir, hwstats,
 			    &nsim_dev_hwstats_l3_disable_fops.fops);
 	debugfs_create_file("fail_next_enable", 0200, hwstats->l3_ddir, hwstats,
 			    &nsim_dev_hwstats_l3_fail_fops.fops);
+#endif
 
 	INIT_DELAYED_WORK(&hwstats->traffic_dw,
 			  &nsim_dev_hwstats_traffic_work);

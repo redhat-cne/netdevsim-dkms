@@ -204,6 +204,17 @@ instance-id: ${VM_NAME}
 local-hostname: ${VM_NAME}
 EOF
 
+HWE_PACKAGES=""
+if [[ "$UBUNTU_RELEASE" == "24.04" ]]; then
+    HWE_PACKAGES="
+  - linux-generic-hwe-24.04
+  - linux-headers-generic-hwe-24.04"
+elif [[ "$UBUNTU_RELEASE" == "22.04" ]]; then
+    HWE_PACKAGES="
+  - linux-generic-hwe-22.04
+  - linux-headers-generic-hwe-22.04"
+fi
+
 cat > "$CIDATA_DIR/user-data" <<EOF
 #cloud-config
 users:
@@ -223,7 +234,7 @@ packages:
   - dkms
   - gcc
   - make
-  - linux-headers-generic
+  - linux-headers-generic${HWE_PACKAGES}
 
 runcmd:
   - systemctl enable --now qemu-guest-agent
@@ -518,14 +529,55 @@ log "Waiting for cloud-init to finish ..."
 vm_ssh "sudo cloud-init status --wait" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
-# 7. Report kernel version
+# 7. Reboot into HWE kernel (needed for both 22.04 and 24.04)
+# ---------------------------------------------------------------------------
+if [[ "$UBUNTU_RELEASE" == "22.04" || "$UBUNTU_RELEASE" == "24.04" ]]; then
+    KERNEL_BEFORE="$(vm_ssh 'uname -r')"
+    log "Current kernel: $KERNEL_BEFORE"
+    log "Rebooting into HWE kernel ..."
+    vm_ssh "sudo reboot" 2>/dev/null || true
+    sleep 15
+
+    SECONDS=0
+    MAX_REBOOT_WAIT=180
+    while (( SECONDS < MAX_REBOOT_WAIT )); do
+        if vm_ssh "true" 2>/dev/null; then
+            break
+        fi
+        sleep 5
+    done
+
+    if ! vm_ssh "true" 2>/dev/null; then
+        die "SSH not reachable after reboot (waited ${MAX_REBOOT_WAIT}s)."
+    fi
+
+    KERNEL_AFTER="$(vm_ssh 'uname -r')"
+    log "Kernel after reboot: $KERNEL_AFTER"
+    if [[ "$KERNEL_BEFORE" == "$KERNEL_AFTER" ]]; then
+        log "WARNING: kernel did not change after reboot — HWE may not be installed"
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# 8. Report kernel version and discover config
 # ---------------------------------------------------------------------------
 log "VM kernel info:"
 vm_ssh "uname -a"
-vm_ssh "uname -r"
+RUNNING_KERNEL="$(vm_ssh 'uname -r')"
+log "  Running kernel: $RUNNING_KERNEL"
+
+log "Kernel config for relevant modules:"
+vm_ssh "grep -E 'NETDEVSIM|PTP_1588|DPLL|DEVLINK|BPF_SYSCALL|XFRM_OFFLOAD|PSAMPLE|MACSEC|GNSS|OPENVSWITCH' \
+    /boot/config-\$(uname -r) 2>/dev/null || echo '  /boot/config not found'"
+
+log "Module presence (builtin / loadable / absent):"
+vm_ssh "echo '--- modules.builtin ---' && \
+    grep -E 'netdevsim|ptp|dpll' /lib/modules/\$(uname -r)/modules.builtin 2>/dev/null || echo '  (none builtin)'; \
+    echo '--- modinfo ---' && \
+    modinfo netdevsim ptp dpll 2>&1 | grep -E '^filename|^description' || echo '  (none loadable)'"
 
 # ---------------------------------------------------------------------------
-# 8. Ensure kernel headers match running kernel
+# 9. Ensure kernel headers match running kernel
 # ---------------------------------------------------------------------------
 log "Ensuring kernel headers and extra modules are installed ..."
 vm_ssh sudo bash -c "'
@@ -537,7 +589,7 @@ ls /lib/modules/\$(uname -r)/build/Makefile >/dev/null 2>&1 && echo \"  OK\" || 
 '"
 
 # ---------------------------------------------------------------------------
-# 9. Copy DKMS source tree and install
+# 10. Copy DKMS source tree and install
 # ---------------------------------------------------------------------------
 log "Copying DKMS source tree to VM ..."
 
@@ -570,14 +622,14 @@ vm_ssh "sudo dkms install --force ${DKMS_PKG}/${DKMS_VER}"
 vm_ssh "dkms status"
 
 # ---------------------------------------------------------------------------
-# 10. Install udev rule for /dev/ptp* compat symlinks
+# 11. Install udev rule for /dev/ptp* compat symlinks
 # ---------------------------------------------------------------------------
 log "Installing nsim_ptp udev rule ..."
 vm_ssh "sudo cp ${REMOTE_DKMS}/99-nsim-ptp.rules /etc/udev/rules.d/ && \
         sudo udevadm control --reload-rules"
 
 # ---------------------------------------------------------------------------
-# 11. Load modules
+# 12. Load modules
 # ---------------------------------------------------------------------------
 log "Loading modules ..."
 
@@ -594,7 +646,7 @@ lsmod | grep -E \"ptp|netdevsim|dpll|gnss\" || true
 '"
 
 # ---------------------------------------------------------------------------
-# 12. Smoke tests
+# 13. Smoke tests
 # ---------------------------------------------------------------------------
 if [[ "$SKIP_TESTS" == true ]]; then
     log "Skipping tests (--skip-tests)."
@@ -646,7 +698,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 13. Install ptp-operator prerequisites
+# 14. Install ptp-operator prerequisites
 # ---------------------------------------------------------------------------
 PTP_REPO="${PTP_REPO:-https://github.com/edcdavid/ptp-operator-upstream.git}"
 PTP_BRANCH="${PTP_BRANCH:-netdevsim-dkms}"
@@ -708,7 +760,7 @@ ovs-vsctl --version | head -1
 PREREQS
 
     # -----------------------------------------------------------------------
-    # 14. Clone ptp-operator, install ginkgo, go mod vendor
+    # 15. Clone ptp-operator, install ginkgo, go mod vendor
     # -----------------------------------------------------------------------
     log "Cloning ptp-operator (branch: ${PTP_BRANCH}) ..."
     vm_ssh "sudo rm -rf /root/ptp-operator"
@@ -725,7 +777,7 @@ go install github.com/onsi/ginkgo/v2/ginkgo@latest
 GO_SETUP
 
     # -----------------------------------------------------------------------
-    # 15. Run ptp-operator test suite (--dkms flag handles all adjustments)
+    # 16. Run ptp-operator test suite (--dkms flag handles all adjustments)
     # -----------------------------------------------------------------------
     log "[$(ts)] Running ptp-operator run-on-vm.sh --dkms ..."
     vm_ssh sudo bash -l <<'REMOTE_SCRIPT'
@@ -745,7 +797,7 @@ REMOTE_SCRIPT
 fi
 
 # ---------------------------------------------------------------------------
-# 16. Interactive shell or finish
+# 17. Interactive shell or finish
 # ---------------------------------------------------------------------------
 if [[ "$DROP_SHELL" == true ]]; then
     log "Dropping into interactive shell (Ctrl-D to exit) ..."
