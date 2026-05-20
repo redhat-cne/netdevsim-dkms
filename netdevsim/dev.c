@@ -1394,6 +1394,11 @@ static int __nsim_dev_port_add(struct nsim_dev *nsim_dev, enum nsim_dev_port_typ
 		goto err_port_debugfs_exit;
 	}
 
+	if (nsim_dev_port_is_pf(nsim_dev_port))
+		debugfs_create_u32("link_up_delay_ms", 0600,
+				   nsim_dev_port->ddir,
+				   &nsim_dev_port->ns->link_up_delay_ms);
+
 	if (nsim_dev_port_is_vf(nsim_dev_port)) {
 		err = devl_rate_leaf_create(&nsim_dev_port->devlink_port,
 					    nsim_dev_port, NULL);

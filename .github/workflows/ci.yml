@@ -115,6 +115,59 @@ jobs:
           IFACE=$(ls /sys/bus/pci/devices/${DOMAIN}:${BUS}:02.0/net/ 2>/dev/null | head -1)
           [ -n "$IFACE" ] && ethtool -T "$IFACE" || echo "WARN: No interface found"
 
+      - name: Smoke test — link up delay
+        if: steps.load.outputs.load_ok == 'true'
+        run: |
+          set -euo pipefail
+
+          BUS_NR=$(cat /sys/module/netdevsim/parameters/pci_bus_nr 2>/dev/null || echo 31)
+          BUS=$(printf "%02x" "$BUS_NR")
+          FAKE_ROOT=$(ls /sys/bus/pci/devices/ 2>/dev/null | grep ":${BUS}:00\.0" | head -1)
+          DOMAIN="${FAKE_ROOT:+$(echo "$FAKE_ROOT" | cut -d: -f1)}"
+          : "${DOMAIN:=0000}"
+
+          IFACE=$(ls /sys/bus/pci/devices/${DOMAIN}:${BUS}:02.0/net/ 2>/dev/null | head -1)
+          [ -z "$IFACE" ] && { echo "SKIP: no interface found"; exit 0; }
+
+          echo "Interface: $IFACE"
+
+          # Bring down first so we start from a known state
+          sudo ip link set "$IFACE" down
+          sleep 1
+
+          # Set a 3-second link-up delay via debugfs
+          DEBUGFS="/sys/kernel/debug/netdevsim/netdevsim1/ports/0/link_up_delay_ms"
+          echo 3000 | sudo tee "$DEBUGFS"
+          echo "link_up_delay_ms set to $(cat "$DEBUGFS")"
+
+          # Bring interface up — carrier should stay off
+          sudo ip link set "$IFACE" up
+          sleep 0.5
+          CARRIER=$(cat /sys/class/net/"$IFACE"/carrier 2>/dev/null || echo 0)
+          echo "Carrier immediately after up: $CARRIER"
+          [ "$CARRIER" -eq 0 ] || { echo "FAIL: carrier should be 0 during delay"; exit 1; }
+
+          # Wait for the delay to expire
+          sleep 4
+          CARRIER=$(cat /sys/class/net/"$IFACE"/carrier 2>/dev/null || echo 0)
+          echo "Carrier after delay: $CARRIER"
+          [ "$CARRIER" -eq 1 ] || { echo "FAIL: carrier should be 1 after delay"; exit 1; }
+
+          # Verify PTP clock is still readable
+          PHC_IDX=$(ethtool -T "$IFACE" 2>/dev/null | grep -oP 'PTP Hardware Clock: \K[0-9]+' || true)
+          if [ -n "$PHC_IDX" ]; then
+            echo "PHC index: $PHC_IDX"
+            # Read the clock via sysfs — confirms the PTP device works
+            cat /sys/class/nsim_ptp/nsim_ptp${PHC_IDX}/clock 2>/dev/null \
+              && echo "OK: PTP clock readable" \
+              || echo "WARN: could not read PTP clock via sysfs"
+          fi
+
+          # Verify hwtstamp config still works after link-up delay
+          ethtool -T "$IFACE" | grep -E "PTP Hardware Clock|hardware"
+
+          echo "=== LINK UP DELAY TEST PASSED ==="
+
       - name: Cleanup
         if: always()
         run: |

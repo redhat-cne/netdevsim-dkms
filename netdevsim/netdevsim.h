@@ -157,6 +157,9 @@ struct netdevsim {
 	struct nsim_ethtool ethtool;
 	struct netdevsim __rcu *peer;
 	struct kernel_hwtstamp_config tstamp_config;
+
+	u32 link_up_delay_ms;
+	struct delayed_work link_up_dwork;
 };
 
 struct netdevsim *

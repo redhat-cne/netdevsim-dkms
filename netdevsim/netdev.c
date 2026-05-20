@@ -400,8 +400,42 @@ static int nsim_set_ts_config(struct net_device *netdev,
 	}
 	return 0;
 }
+static void nsim_link_up_work(struct work_struct *work)
+{
+	struct netdevsim *ns =
+		container_of(work, struct netdevsim, link_up_dwork.work);
+
+	netif_carrier_on(ns->netdev);
+}
+
+static int nsim_open(struct net_device *dev)
+{
+	struct netdevsim *ns = netdev_priv(dev);
+	u32 delay = READ_ONCE(ns->link_up_delay_ms);
+
+	if (delay)
+		schedule_delayed_work(&ns->link_up_dwork,
+				      msecs_to_jiffies(delay));
+	else
+		netif_carrier_on(dev);
+
+	return 0;
+}
+
+static int nsim_stop(struct net_device *dev)
+{
+	struct netdevsim *ns = netdev_priv(dev);
+
+	cancel_delayed_work_sync(&ns->link_up_dwork);
+	netif_carrier_off(dev);
+
+	return 0;
+}
+
 static const struct net_device_ops nsim_netdev_ops = {
 	.ndo_start_xmit = nsim_start_xmit,
+	.ndo_open = nsim_open,
+	.ndo_stop = nsim_stop,
 	.ndo_set_rx_mode = nsim_set_rx_mode,
 	.ndo_set_mac_address = eth_mac_addr,
 	.ndo_validate_addr = eth_validate_addr,
@@ -525,6 +559,8 @@ static int nsim_init_netdevsim(struct netdevsim *ns)
 	ns->phc = phc;
 	ns->netdev->netdev_ops = &nsim_netdev_ops;
 
+	INIT_DELAYED_WORK(&ns->link_up_dwork, nsim_link_up_work);
+
 	err = nsim_udp_tunnels_info_create(ns->nsim_dev, ns->netdev);
 	if (err)
 		goto err_phc_destroy;
@@ -536,6 +572,8 @@ static int nsim_init_netdevsim(struct netdevsim *ns)
 
 	nsim_macsec_init(ns);
 	nsim_ipsec_init(ns);
+
+	netif_carrier_off(ns->netdev);
 
 	err = register_netdevice(ns->netdev);
 	if (err)
@@ -623,6 +661,8 @@ void nsim_destroy(struct netdevsim *ns)
 {
 	struct net_device *dev = ns->netdev;
 	struct netdevsim *peer;
+
+	cancel_delayed_work_sync(&ns->link_up_dwork);
 
 	rtnl_lock();
 	peer = rtnl_dereference(ns->peer);
