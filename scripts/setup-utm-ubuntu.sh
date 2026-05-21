@@ -131,7 +131,7 @@ set -euo pipefail
 
 apt-get update -qq
 apt-get install -y -qq podman pciutils uidmap slirp4netns openvswitch-switch \
-    git ethtool linuxptp 2>&1 | tail -5
+    git ethtool linuxptp zsh 2>&1 | tail -5
 
 ARCH=$(uname -m)
 GOARCH=arm64
@@ -173,6 +173,13 @@ sysctl -w fs.inotify.max_user_watches=524288
 # ginkgo (test runner)
 export PATH=/usr/local/go/bin:/root/go/bin:$PATH
 go install github.com/onsi/ginkgo/v2/ginkgo@latest
+
+# zsh + oh-my-zsh for root
+chsh -s /usr/bin/zsh root
+sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
+# Carry PATH into .zshrc
+grep -q /usr/local/go/bin /root/.zshrc 2>/dev/null || \
+    echo 'export PATH=$PATH:$HOME/go/bin:/usr/local/go/bin' >> /root/.zshrc
 
 echo "--- Verification ---"
 podman --version
