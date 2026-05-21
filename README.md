@@ -125,11 +125,7 @@ When using netdevsim inside containers or Kubernetes pods:
   actual `/dev/nsim_ptp*` device nodes do appear in pods. Create the
   symlinks inside pods: `for i in 0 1 2 ...; do ln -sf nsim_ptp$i /dev/ptp$i; done`
 
-## Local Testing with UTM (macOS)
-
-The `scripts/test-utm-ubuntu.sh` script spins up a disposable Ubuntu VM via
-[UTM](https://mac.getutm.app), installs the DKMS package, loads the modules,
-and runs smoke tests.
+## Local UTM VMs (macOS)
 
 ### Prerequisites
 
@@ -140,13 +136,42 @@ and runs smoke tests.
 sudo ln -sf /Applications/UTM.app/Contents/MacOS/utmctl /usr/local/bin/utmctl
 ```
 
-### Usage
+### Quick Setup (no tests)
+
+`scripts/setup-utm-ubuntu.sh` creates a UTM VM with the DKMS modules
+installed and loaded, adds an SSH config entry, and stops — no tests are run.
 
 ```bash
-# Ubuntu 22.04 (kernel 6.8 HWE)
+# Default: Ubuntu 24.04, DKMS installed, SSH config added
+./scripts/setup-utm-ubuntu.sh
+
+# Then connect:
+ssh netdevsim-ubuntu-test
+
+# Ubuntu 22.04 with a custom VM name
+./scripts/setup-utm-ubuntu.sh --release 22.04 --vm-name my-dev-vm
+ssh my-dev-vm
+
+# Drop into a shell immediately after setup
+./scripts/setup-utm-ubuntu.sh --shell
+
+# Tear down VM and remove the SSH config entry
+./scripts/setup-utm-ubuntu.sh --vm-name my-dev-vm --cleanup
+```
+
+If an SSH config entry for the VM name already exists, the script prompts
+you to remove it or pick a different `--vm-name`.
+
+### Testing
+
+`scripts/test-utm-ubuntu.sh` does the same VM setup plus smoke tests and
+(optionally) the full ptp-operator test suite.
+
+```bash
+# Ubuntu 22.04 (kernel 6.8 HWE) — smoke tests only
 ./scripts/test-utm-ubuntu.sh --release 22.04 --skip-ptp-operator --shell
 
-# Ubuntu 24.04 (kernel 6.17 HWE)
+# Ubuntu 24.04 (kernel 6.17 HWE) — smoke tests only
 ./scripts/test-utm-ubuntu.sh --release 24.04 --skip-ptp-operator --shell
 ```
 
