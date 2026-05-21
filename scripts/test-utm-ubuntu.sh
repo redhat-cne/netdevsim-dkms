@@ -224,6 +224,17 @@ users:
     ssh_authorized_keys:
       - ${SSH_PUBKEY}
 
+ssh_pwauth: false
+disable_root: false
+
+runcmd:
+  - mkdir -p /root/.ssh && chmod 700 /root/.ssh
+  - cp /home/ubuntu/.ssh/authorized_keys /root/.ssh/authorized_keys
+  - chmod 600 /root/.ssh/authorized_keys
+  - sed -i 's/^#\\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+  - systemctl restart ssh || systemctl restart sshd
+  - systemctl enable --now qemu-guest-agent
+
 growpart:
   mode: auto
   devices: ['/']
@@ -235,9 +246,6 @@ packages:
   - gcc
   - make
   - linux-headers-generic${HWE_PACKAGES}
-
-runcmd:
-  - systemctl enable --now qemu-guest-agent
 EOF
 
 if [[ -n "$MKISO_CMD" ]]; then

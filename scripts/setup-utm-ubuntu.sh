@@ -123,10 +123,10 @@ fi
 # Install test dependencies (but not the test repo itself)
 # ---------------------------------------------------------------------------
 SSH_OPTS=(-i "$SSH_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5)
-vm_ssh() { ssh "${SSH_OPTS[@]}" "ubuntu@${VM_IP}" "$@"; }
+vm_ssh() { ssh "${SSH_OPTS[@]}" "root@${VM_IP}" "$@"; }
 
 echo "==> Installing test dependencies on VM ..."
-vm_ssh sudo bash <<'DEPS'
+vm_ssh bash <<'DEPS'
 set -euo pipefail
 
 apt-get update -qq
@@ -199,7 +199,7 @@ cat >> "$SSH_CONFIG" <<EOF
 ${MARKER_BEGIN}
 Host ${VM_NAME}
     HostName ${VM_IP}
-    User ubuntu
+    User root
     IdentityFile ${SSH_KEY}
     StrictHostKeyChecking no
     UserKnownHostsFile /dev/null
