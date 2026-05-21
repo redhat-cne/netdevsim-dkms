@@ -630,7 +630,7 @@ vm_ssh "sudo dkms install --force ${DKMS_PKG}/${DKMS_VER}"
 vm_ssh "dkms status"
 
 # ---------------------------------------------------------------------------
-# 11. Install udev rule for /dev/ptp* compat symlinks
+# 11. Install udev rule for /dev/ptp* compat device nodes
 # ---------------------------------------------------------------------------
 log "Installing nsim_ptp udev rule ..."
 vm_ssh "sudo cp ${REMOTE_DKMS}/99-nsim-ptp.rules /etc/udev/rules.d/ && \
@@ -680,12 +680,16 @@ else
     # Verify the bus device appeared
     ls /sys/bus/netdevsim/devices/netdevsim1/
 
-    # Verify PTP clock (nsim_ptp class + /dev/ptp compat symlink)
+    # Verify PTP clock (nsim_ptp class + /dev/ptp compat device node)
     ls /sys/class/nsim_ptp/
     ls -la /dev/nsim_ptp* /dev/ptp* 2>/dev/null
 
-    # Verify /dev/ptp* symlinks point to nsim_ptp devices
-    readlink /dev/ptp0 | grep -q nsim_ptp && echo \"  /dev/ptp0 -> nsim_ptp OK\"
+    # Verify /dev/ptpN has the same major:minor as /dev/nsim_ptpN
+    PTP_RDEV=\$(stat -c '%t:%T' /dev/ptp0 2>/dev/null || true)
+    NSIM_RDEV=\$(stat -c '%t:%T' /dev/nsim_ptp0 2>/dev/null || true)
+    [ -n \"\$PTP_RDEV\" ] && [ \"\$PTP_RDEV\" = \"\$NSIM_RDEV\" ] \\
+        && echo \"  /dev/ptp0 matches /dev/nsim_ptp0 (rdev \$PTP_RDEV)\" \\
+        || echo \"  WARN: /dev/ptp0 rdev mismatch or missing\"
 
     # Verify ethtool reports a valid PHC
     IFACE=\$(ls /sys/bus/pci/devices/000\${PCI_ADDR}/net/ 2>/dev/null | head -1)

@@ -1,4 +1,4 @@
-# Create /dev/ptp* compat symlinks for nsim_ptp devices so that
+# Create /dev/ptpN compat device nodes for nsim_ptp devices so that
 # linuxptp tools (ptp4l, phc2sys, ts2phc) find clocks at the
 # standard path reported by ethtool -T.
 #
@@ -6,8 +6,15 @@
 # colliding with the kernel's built-in PTP subsystem, but ethtool
 # still reports integer PHC indices that userspace maps to /dev/ptpN.
 #
+# We use RUN+=mknod instead of SYMLINK+= because real device nodes
+# propagate into containers (Kind nodes, Kubernetes pods), whereas
+# udev symlinks only exist on the host devtmpfs.
+#
 # MODE="0666" is needed because the non-standard major number (234)
 # is not in the default cgroup device allowlist; containers and
 # systemd-sandboxed services (DevicePolicy=closed) would get
 # "Operation not permitted" without world-readable permissions.
-SUBSYSTEM=="nsim_ptp", KERNEL=="nsim_ptp[0-9]*", MODE="0666", SYMLINK+="ptp%n"
+SUBSYSTEM=="nsim_ptp", KERNEL=="nsim_ptp[0-9]*", MODE="0666", \
+    RUN+="/bin/sh -c 'rm -f /dev/ptp%n; mknod /dev/ptp%n c %M %m; chmod 666 /dev/ptp%n'"
+SUBSYSTEM=="nsim_ptp", KERNEL=="nsim_ptp[0-9]*", ACTION=="remove", \
+    RUN+="/bin/rm -f /dev/ptp%n"

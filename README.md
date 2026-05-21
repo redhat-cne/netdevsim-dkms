@@ -70,7 +70,7 @@ sudo modprobe netdevsim pci_bus_nr=0x1f
 
 ## udev Rule
 
-Install the udev rule to create `/dev/ptp*` compat symlinks:
+Install the udev rule to create `/dev/ptp*` compat device nodes:
 
 ```bash
 sudo cp 99-nsim-ptp.rules /etc/udev/rules.d/
@@ -79,8 +79,10 @@ sudo udevadm control --reload-rules
 
 The `nsim_ptp` module registers a separate device class (`/dev/nsim_ptp*`)
 to avoid colliding with the kernel's built-in PTP subsystem. The udev rule
-creates standard `/dev/ptpN` symlinks so that `ethtool -T` PHC indices
-resolve correctly for `ptp4l` and other linuxptp tools.
+creates real `/dev/ptpN` device nodes (via `mknod`, same major:minor) so
+that `ethtool -T` PHC indices resolve correctly for `ptp4l` and other
+linuxptp tools. Real device nodes propagate into containers, unlike
+symlinks which only exist on the host devtmpfs.
 
 ## Usage
 
@@ -120,10 +122,15 @@ When using netdevsim inside containers or Kubernetes pods:
   `char-ptp` class devices. Override with a drop-in:
   `DeviceAllow=char-* rw` and `DevicePolicy=auto`.
 
-- **Kubernetes pods:** The `/dev/ptp*` symlinks from the udev rule
-  propagate to kind node containers but NOT into Kubernetes pods. The
-  actual `/dev/nsim_ptp*` device nodes do appear in pods. Create the
-  symlinks inside pods: `for i in 0 1 2 ...; do ln -sf nsim_ptp$i /dev/ptp$i; done`
+- **Kubernetes pods:** The udev rule creates real `/dev/ptpN` device
+  nodes (not symlinks) so they propagate into containers. If your pod
+  still doesn't see them (e.g. the container runtime only allowlists
+  `/dev/nsim_ptp*`), run the helper script inside the pod:
+
+  ```bash
+  scripts/nsim-ptp-container-setup.sh          # one-shot
+  scripts/nsim-ptp-container-setup.sh --watch   # sidecar loop
+  ```
 
 ## Local UTM VMs (macOS)
 

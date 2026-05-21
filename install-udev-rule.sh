@@ -1,5 +1,5 @@
 #!/bin/bash
-# POST_INSTALL hook for DKMS: install the nsim_ptp udev symlink rule.
+# POST_INSTALL hook for DKMS: install the nsim_ptp udev device-node rule.
 set -e
 
 RULE_SRC="${dkms_tree}/${PACKAGE_NAME}/${PACKAGE_VERSION}/source/99-nsim-ptp.rules"

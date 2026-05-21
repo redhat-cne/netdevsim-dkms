@@ -100,9 +100,17 @@ jobs:
           set -euo pipefail
           ls /sys/class/nsim_ptp/
           ls -la /dev/nsim_ptp* /dev/ptp* 2>/dev/null || echo "No PTP devices found"
-          readlink /dev/ptp0 2>/dev/null | grep -q nsim_ptp \
-            && echo "OK: /dev/ptp0 -> $(readlink /dev/ptp0)" \
-            || echo "WARN: /dev/ptp0 symlink not found"
+          if [ -e /dev/ptp0 ] && [ -e /dev/nsim_ptp0 ]; then
+            PTP_RDEV=$(stat -c '%t:%T' /dev/ptp0)
+            NSIM_RDEV=$(stat -c '%t:%T' /dev/nsim_ptp0)
+            if [ "$PTP_RDEV" = "$NSIM_RDEV" ]; then
+              echo "OK: /dev/ptp0 ($PTP_RDEV) matches /dev/nsim_ptp0"
+            else
+              echo "WARN: /dev/ptp0 ($PTP_RDEV) != /dev/nsim_ptp0 ($NSIM_RDEV)"
+            fi
+          else
+            echo "WARN: /dev/ptp0 or /dev/nsim_ptp0 not found"
+          fi
 
       - name: Smoke test — verify ethtool PHC
         if: steps.load.outputs.load_ok == 'true'
