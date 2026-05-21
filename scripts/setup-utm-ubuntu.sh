@@ -111,13 +111,79 @@ fi
 # ---------------------------------------------------------------------------
 # Extract VM IP and SSH key from test-utm-ubuntu.sh output
 # ---------------------------------------------------------------------------
-VM_IP="$(grep -oP '(?<=VM IP: )\S+' "$LOGFILE" | tail -1 || true)"
-SSH_KEY="$(grep -oP '(?<=ssh -i )\S+' "$LOGFILE" | tail -1 || true)"
+VM_IP="$(grep 'VM IP: ' "$LOGFILE" | awk '{for(i=1;i<=NF;i++) if($(i-1)=="IP:") print $i}' | tail -1 || true)"
+SSH_KEY="$(grep 'ssh -i ' "$LOGFILE" | awk '{for(i=1;i<=NF;i++) if($i=="-i") {print $(i+1); exit}}' | tail -1 || true)"
 
 if [[ -z "$VM_IP" ]]; then
     echo "WARNING: Could not extract VM IP from output. Skipping SSH config."
     exit 0
 fi
+
+# ---------------------------------------------------------------------------
+# Install test dependencies (but not the test repo itself)
+# ---------------------------------------------------------------------------
+SSH_OPTS=(-i "$SSH_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5)
+vm_ssh() { ssh "${SSH_OPTS[@]}" "ubuntu@${VM_IP}" "$@"; }
+
+echo "==> Installing test dependencies on VM ..."
+vm_ssh sudo bash <<'DEPS'
+set -euo pipefail
+
+apt-get update -qq
+apt-get install -y -qq podman pciutils uidmap slirp4netns openvswitch-switch \
+    git ethtool linuxptp 2>&1 | tail -5
+
+ARCH=$(uname -m)
+GOARCH=arm64
+[ "$ARCH" = "x86_64" ] && GOARCH=amd64
+
+# kind
+curl -fsSLo /usr/bin/kind "https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-${GOARCH}"
+chmod +x /usr/bin/kind
+
+# kubectl + oc
+if [ "$GOARCH" = "arm64" ]; then
+    curl -fsSLo /tmp/oc.tar.gz https://mirror.openshift.com/pub/openshift-v4/clients/ocp/latest/openshift-client-linux-arm64.tar.gz
+else
+    curl -fsSLo /tmp/oc.tar.gz https://mirror.openshift.com/pub/openshift-v4/clients/ocp/latest/openshift-client-linux.tar.gz
+fi
+tar -C /tmp -xzf /tmp/oc.tar.gz oc kubectl
+mv /tmp/oc /tmp/kubectl /usr/local/bin/
+
+# Go
+GO_VERSION=$(curl -s https://go.dev/VERSION?m=text | head -n 1)
+curl -fsSLo /tmp/go.tar.gz "https://go.dev/dl/${GO_VERSION}.linux-${GOARCH}.tar.gz"
+rm -rf /usr/local/go
+tar -C /usr/local -xzf /tmp/go.tar.gz
+
+# helm
+curl -fsSL "https://get.helm.sh/helm-v3.17.3-linux-${GOARCH}.tar.gz" | tar -C /tmp -xzf -
+mv "/tmp/linux-${GOARCH}/helm" /usr/local/bin/helm
+
+# PATH for root and ubuntu
+for RC in /root/.bashrc /home/ubuntu/.bashrc; do
+    grep -q /usr/local/go/bin "$RC" 2>/dev/null || \
+        echo 'export PATH=$PATH:$HOME/go/bin:/usr/local/go/bin' >> "$RC"
+done
+
+# inotify limits (kind needs these)
+sysctl -w fs.inotify.max_user_instances=512
+sysctl -w fs.inotify.max_user_watches=524288
+
+# ginkgo (test runner)
+export PATH=/usr/local/go/bin:/root/go/bin:$PATH
+go install github.com/onsi/ginkgo/v2/ginkgo@latest
+
+echo "--- Verification ---"
+podman --version
+kind version
+kubectl version --client 2>/dev/null | head -1
+go version
+helm version --short
+ovs-vsctl --version | head -1
+ginkgo version
+DEPS
+echo "==> Test dependencies installed."
 
 # ---------------------------------------------------------------------------
 # Add SSH config entry
