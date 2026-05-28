@@ -123,14 +123,7 @@ When using netdevsim inside containers or Kubernetes pods:
   `DeviceAllow=char-* rw` and `DevicePolicy=auto`.
 
 - **Kubernetes pods:** The udev rule creates real `/dev/ptpN` device
-  nodes (not symlinks) so they propagate into containers. If your pod
-  still doesn't see them (e.g. the container runtime only allowlists
-  `/dev/nsim_ptp*`), run the helper script inside the pod:
-
-  ```bash
-  scripts/nsim-ptp-container-setup.sh          # one-shot
-  scripts/nsim-ptp-container-setup.sh --watch   # sidecar loop
-  ```
+  nodes (not symlinks) so they propagate into containers.
 
 ## Local UTM VMs (macOS)
 
