@@ -10,8 +10,8 @@ on:
 env:
   DKMS_PKG: netdevsim
   DKMS_VER: "6.9.5"
-  PTP_REPO: https://github.com/edcdavid/ptp-operator-upstream.git
-  PTP_BRANCH: netdevsim-dkms
+  PTP_REPO: https://github.com/k8snetworkplumbingwg/ptp-operator.git
+  PTP_BRANCH: main
 
 jobs:
   # ------------------------------------------------------------------
