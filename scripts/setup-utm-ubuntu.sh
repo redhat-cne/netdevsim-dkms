@@ -89,7 +89,7 @@ fi
 # ---------------------------------------------------------------------------
 if [[ "$CLEANUP" == true ]]; then
     remove_ssh_config_entry
-    exec "${SCRIPT_DIR}/test-utm-ubuntu.sh" "${ARGS[@]}"
+    exec "${SCRIPT_DIR}/test-utm-ubuntu.sh" ${ARGS[@]+"${ARGS[@]}"}
 fi
 
 # ---------------------------------------------------------------------------
@@ -100,7 +100,7 @@ trap 'rm -f "$LOGFILE"' EXIT
 
 echo "==> Setting up UTM VM '${VM_NAME}' with DKMS (no tests) ..."
 
-"${SCRIPT_DIR}/test-utm-ubuntu.sh" --skip-tests "${ARGS[@]}" 2>&1 | tee "$LOGFILE"
+"${SCRIPT_DIR}/test-utm-ubuntu.sh" --skip-tests ${ARGS[@]+"${ARGS[@]}"} 2>&1 | tee "$LOGFILE"
 TEST_RC=${PIPESTATUS[0]}
 
 if [[ $TEST_RC -ne 0 ]]; then
