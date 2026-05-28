@@ -1,6 +1,5 @@
-# Full CI: build DKMS modules, run smoke tests on every PR.
-# On workflow_dispatch, also run ptp-operator e2e tests — build images
-# once (ptp-images), then run each scenario in parallel (ptp-test matrix).
+# Full CI: build DKMS modules, run smoke tests, build ptp-operator images,
+# and run ptp-operator e2e tests on every PR and workflow_dispatch.
 
 name: CI
 
@@ -141,10 +140,8 @@ jobs:
 
   # ------------------------------------------------------------------
   # ptp-operator: build images once and upload as artifact
-  # (workflow_dispatch only)
   # ------------------------------------------------------------------
   ptp-images:
-    if: github.event_name == 'workflow_dispatch'
     needs: dkms-test
     runs-on: ubuntu-22.04
     timeout-minutes: 45
@@ -197,10 +194,8 @@ jobs:
 
   # ------------------------------------------------------------------
   # ptp-operator: one parallel runner per scenario
-  # (workflow_dispatch only)
   # ------------------------------------------------------------------
   ptp-test:
-    if: github.event_name == 'workflow_dispatch'
     needs: ptp-images
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
