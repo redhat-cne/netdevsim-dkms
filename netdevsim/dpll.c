@@ -10,6 +10,7 @@
  */
 
 #include <dkms_compat.h>
+
 #include <linux/dpll.h>
 #include <linux/gnss.h>
 #include <linux/hrtimer.h>
@@ -274,10 +275,13 @@ static int ubx_build_nav_clock(u8 *buf, size_t bufsz, u8 gps_fix)
 static void nsim_dpll_ntf_work(struct work_struct *work)
 {
 	struct nsim_dpll *ndpll = container_of(work, struct nsim_dpll, ntf_work);
+	int i;
 
 	dpll_device_change_ntf(ndpll->pps_dpll);
 	dpll_device_change_ntf(ndpll->eec_dpll);
 	dpll_pin_change_ntf(ndpll->gnss_pin);
+	for (i = 0; i < ndpll->num_ext_pins; i++)
+		dpll_pin_change_ntf(ndpll->ext_pins[i]);
 }
 
 static enum hrtimer_restart nsim_dpll_ntf_timer_cb(struct hrtimer *timer)
@@ -493,6 +497,23 @@ static struct dpll_pin_properties nsim_dpll_gnss_pin_props = {
 	.freq_supported_num = ARRAY_SIZE(nsim_dpll_gnss_freq),
 };
 
+static struct dpll_pin_frequency nsim_dpll_ext_freq[] = {
+	DPLL_PIN_FREQUENCY_1PPS,
+	DPLL_PIN_FREQUENCY(DPLL_PIN_FREQUENCY_10_MHZ),
+};
+
+#define NSIM_DPLL_NUM_EXT_PINS	4
+#define NSIM_DPLL_EXT_PIN_BASE	(NSIM_DPLL_GNSS_PIN_IDX + 1)
+
+static const char *nsim_dpll_ext_pin_labels[NSIM_DPLL_NUM_EXT_PINS] = {
+	"SMA1", "SMA2", "U.FL1", "U.FL2",
+};
+
+static const enum dpll_pin_direction nsim_dpll_ext_pin_dirs[NSIM_DPLL_NUM_EXT_PINS] = {
+	DPLL_PIN_DIRECTION_INPUT, DPLL_PIN_DIRECTION_OUTPUT,
+	DPLL_PIN_DIRECTION_INPUT, DPLL_PIN_DIRECTION_OUTPUT,
+};
+
 /* ---- helpers ----------------------------------------------------------- */
 
 static void nsim_dpll_cleanup_port_pins(struct nsim_dpll *ndpll);
@@ -555,6 +576,47 @@ int nsim_dpll_init(struct nsim_dev *nsim_dev)
 	if (err)
 		goto err_gnss_put;
 
+	/* E810-compatible external pins (SMA1, SMA2, U.FL1, U.FL2) */
+	{
+		int i;
+
+		for (i = 0; i < NSIM_DPLL_NUM_EXT_PINS; i++) {
+			struct dpll_pin_properties eprops = {};
+			struct dpll_pin *epin;
+
+			eprops.board_label = nsim_dpll_ext_pin_labels[i];
+			eprops.type = DPLL_PIN_TYPE_EXT;
+			eprops.capabilities = 0;
+			eprops.freq_supported = nsim_dpll_ext_freq;
+			eprops.freq_supported_num =
+				ARRAY_SIZE(nsim_dpll_ext_freq);
+
+			epin = dpll_pin_get(ndpll->clock_id,
+					    NSIM_DPLL_EXT_PIN_BASE + i,
+					    THIS_MODULE, &eprops);
+			if (IS_ERR(epin)) {
+				err = PTR_ERR(epin);
+				goto err_ext_cleanup;
+			}
+
+			ndpll->ext_pin_privs[i].direction =
+				nsim_dpll_ext_pin_dirs[i];
+			ndpll->ext_pin_privs[i].frequency =
+				DPLL_PIN_FREQUENCY_1_HZ;
+
+			err = dpll_pin_register(ndpll->pps_dpll, epin,
+						&nsim_dpll_gnss_pin_ops,
+						&ndpll->ext_pin_privs[i]);
+			if (err) {
+				dpll_pin_put(epin);
+				goto err_ext_cleanup;
+			}
+
+			ndpll->ext_pins[i] = epin;
+			ndpll->num_ext_pins = i + 1;
+		}
+	}
+
 	/*
 	 * Start a 1 Hz timer that re-emits DPLL device/pin change
 	 * notifications so that late-joining userspace consumers
@@ -572,7 +634,7 @@ int nsim_dpll_init(struct nsim_dev *nsim_dev)
 	/* Associate per-port output pins with netdevs */
 	{
 		struct nsim_dev_port *nsim_dev_port;
-		int pin_idx = NSIM_DPLL_GNSS_PIN_IDX + 1;
+		int pin_idx = NSIM_DPLL_EXT_PIN_BASE + NSIM_DPLL_NUM_EXT_PINS;
 
 		list_for_each_entry(nsim_dev_port, &nsim_dev->port_list, list) {
 			struct netdevsim *ns = nsim_dev_port->ns;
@@ -672,6 +734,12 @@ int nsim_dpll_init(struct nsim_dev *nsim_dev)
 	dpll_device_change_ntf(ndpll->eec_dpll);
 	dpll_pin_change_ntf(ndpll->gnss_pin);
 	{
+		int i;
+
+		for (i = 0; i < ndpll->num_ext_pins; i++)
+			dpll_pin_change_ntf(ndpll->ext_pins[i]);
+	}
+	{
 		struct nsim_dpll_pin *npin;
 
 		list_for_each_entry(npin, &ndpll->port_pins, list)
@@ -686,6 +754,19 @@ err_ports_cleanup:
 	hrtimer_cancel(&ndpll->ntf_timer);
 	cancel_work_sync(&ndpll->ntf_work);
 	nsim_dpll_cleanup_port_pins(ndpll);
+err_ext_cleanup:
+	{
+		int i;
+
+		for (i = ndpll->num_ext_pins - 1; i >= 0; i--) {
+			dpll_pin_unregister(ndpll->pps_dpll,
+					    ndpll->ext_pins[i],
+					    &nsim_dpll_gnss_pin_ops,
+					    &ndpll->ext_pin_privs[i]);
+			dpll_pin_put(ndpll->ext_pins[i]);
+		}
+		ndpll->num_ext_pins = 0;
+	}
 	dpll_pin_unregister(ndpll->pps_dpll, ndpll->gnss_pin,
 			    &nsim_dpll_gnss_pin_ops, &ndpll->gnss_pin_priv);
 err_gnss_put:
@@ -735,6 +816,19 @@ void nsim_dpll_exit(struct nsim_dev *nsim_dev)
 	}
 
 	nsim_dpll_cleanup_port_pins(ndpll);
+
+	{
+		int i;
+
+		for (i = ndpll->num_ext_pins - 1; i >= 0; i--) {
+			dpll_pin_unregister(ndpll->pps_dpll,
+					    ndpll->ext_pins[i],
+					    &nsim_dpll_gnss_pin_ops,
+					    &ndpll->ext_pin_privs[i]);
+			dpll_pin_put(ndpll->ext_pins[i]);
+		}
+		ndpll->num_ext_pins = 0;
+	}
 
 	dpll_pin_unregister(ndpll->pps_dpll, ndpll->gnss_pin,
 			    &nsim_dpll_gnss_pin_ops, &ndpll->gnss_pin_priv);

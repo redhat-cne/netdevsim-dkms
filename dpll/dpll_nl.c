@@ -149,7 +149,7 @@ static const struct genl_multicast_group dpll_nl_mcgrps[] = {
 };
 
 struct genl_family dpll_nl_family __ro_after_init = {
-	.name		= "nsim_dpll",
+	.name		= "dpll",
 	.version	= DPLL_FAMILY_VERSION,
 	.netnsok	= true,
 	.parallel_ops	= true,

@@ -853,14 +853,67 @@ const struct dpll_pin_ops *dpll_pin_ops(struct dpll_pin_ref *ref)
 	return reg->ops;
 }
 
+/*
+ * On kernels with CONFIG_DPLL=y the built-in DPLL subsystem already
+ * registers a genl family named "dpll".  We need to replace it with
+ * our own so that netdevsim DPLL devices are served by the DKMS code
+ * (which matches the netdevsim driver API exactly).
+ *
+ * Strategy:
+ *   1. Look up the kernel's dpll_nl_family via kprobes
+ *   2. genl_unregister_family() it
+ *   3. genl_register_family() our own (also named "dpll")
+ *   4. On exit, reverse the process
+ */
+
+#include <linux/kprobes.h>
+
+static bool kernel_dpll_hijacked;
+
+typedef unsigned long (*kallsyms_lookup_name_t)(const char *name);
+
+static unsigned long nsim_lookup_name(const char *name)
+{
+	static kallsyms_lookup_name_t fn;
+
+	if (!fn) {
+		struct kprobe kp = { .symbol_name = "kallsyms_lookup_name" };
+		int ret = register_kprobe(&kp);
+
+		if (ret < 0)
+			return 0;
+		fn = (kallsyms_lookup_name_t)kp.addr;
+		unregister_kprobe(&kp);
+	}
+	return fn(name);
+}
+
 static int __init dpll_init(void)
 {
+	unsigned long addr;
 	int ret;
+
+	addr = nsim_lookup_name("dpll_nl_family");
+	if (!addr) {
+		pr_warn("nsim_dpll: cannot find kernel dpll_nl_family\n");
+	} else {
+		const struct genl_family *kfam =
+			(const struct genl_family *)addr;
+
+		ret = genl_unregister_family(kfam);
+		if (ret) {
+			pr_warn("nsim_dpll: failed to unregister kernel dpll family: %d\n", ret);
+		} else {
+			kernel_dpll_hijacked = true;
+			pr_info("nsim_dpll: unregistered kernel built-in dpll genl family\n");
+		}
+	}
 
 	ret = genl_register_family(&dpll_nl_family);
 	if (ret)
 		goto error;
 
+	pr_info("nsim_dpll: registered dpll genl family (replacing kernel built-in)\n");
 	return 0;
 
 error:
@@ -871,10 +924,24 @@ error:
 static void __exit dpll_exit(void)
 {
 	genl_unregister_family(&dpll_nl_family);
+
+	/*
+	 * We intentionally do NOT re-register the kernel's built-in
+	 * dpll genl family here.  genl_register_family() writes to the
+	 * struct (setting family->id etc.) and the kernel's
+	 * dpll_nl_family is in __ro_after_init memory — writing to it
+	 * causes a fatal page fault on aarch64.
+	 *
+	 * This means the dpll genl family is absent after module
+	 * unload, which is acceptable for CI/test environments.
+	 */
+	if (kernel_dpll_hijacked)
+		pr_info("nsim_dpll: kernel dpll family was hijacked; not restoring (ro_after_init)\n");
+
 	mutex_destroy(&dpll_lock);
 }
 
-subsys_initcall(dpll_init);
+module_init(dpll_init);
 module_exit(dpll_exit);
 
 MODULE_LICENSE("GPL");
