@@ -1,6 +1,5 @@
-# Full CI: build DKMS modules, run smoke tests on every PR.
-# On workflow_dispatch, also run ptp-operator e2e tests — build images
-# once (ptp-images), then run each scenario in parallel (ptp-test matrix).
+# Full CI: build DKMS modules, run smoke tests, build ptp-operator images,
+# and run ptp-operator e2e tests on every PR and workflow_dispatch.
 
 name: CI
 
@@ -8,11 +7,15 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 env:
   DKMS_PKG: netdevsim
   DKMS_VER: "6.9.5"
-  PTP_REPO: https://github.com/edcdavid/ptp-operator-upstream.git
-  PTP_BRANCH: netdevsim-dkms
+  PTP_REPO: https://github.com/k8snetworkplumbingwg/ptp-operator.git
+  PTP_BRANCH: main
 
 jobs:
   # ------------------------------------------------------------------
@@ -100,9 +103,17 @@ jobs:
           set -euo pipefail
           ls /sys/class/nsim_ptp/
           ls -la /dev/nsim_ptp* /dev/ptp* 2>/dev/null || echo "No PTP devices found"
-          readlink /dev/ptp0 2>/dev/null | grep -q nsim_ptp \
-            && echo "OK: /dev/ptp0 -> $(readlink /dev/ptp0)" \
-            || echo "WARN: /dev/ptp0 symlink not found"
+          if [ -e /dev/ptp0 ] && [ -e /dev/nsim_ptp0 ]; then
+            PTP_RDEV=$(stat -c '%t:%T' /dev/ptp0)
+            NSIM_RDEV=$(stat -c '%t:%T' /dev/nsim_ptp0)
+            if [ "$PTP_RDEV" = "$NSIM_RDEV" ]; then
+              echo "OK: /dev/ptp0 ($PTP_RDEV) matches /dev/nsim_ptp0"
+            else
+              echo "WARN: /dev/ptp0 ($PTP_RDEV) != /dev/nsim_ptp0 ($NSIM_RDEV)"
+            fi
+          else
+            echo "WARN: /dev/ptp0 or /dev/nsim_ptp0 not found"
+          fi
 
       - name: Smoke test — verify ethtool PHC
         if: steps.load.outputs.load_ok == 'true'
@@ -133,10 +144,8 @@ jobs:
 
   # ------------------------------------------------------------------
   # ptp-operator: build images once and upload as artifact
-  # (workflow_dispatch only)
   # ------------------------------------------------------------------
   ptp-images:
-    if: github.event_name == 'workflow_dispatch'
     needs: dkms-test
     runs-on: ubuntu-22.04
     timeout-minutes: 45
@@ -174,6 +183,9 @@ jobs:
           set -x
           export PATH=/usr/local/go/bin:/root/go/bin:$PATH
           export KIND_EXPERIMENTAL_PROVIDER=podman
+          export BUILDAH_LAYERS=true
+          export BUILDAH_HISTORY=true
+          export PODMAN_BUILD_OPTS="--rm=false --force-rm=false"
 
           VM_IP=$(hostname -I | awk '{print $1}')
           cd /root/ptp-operator/scripts
@@ -189,10 +201,8 @@ jobs:
 
   # ------------------------------------------------------------------
   # ptp-operator: one parallel runner per scenario
-  # (workflow_dispatch only)
   # ------------------------------------------------------------------
   ptp-test:
-    if: github.event_name == 'workflow_dispatch'
     needs: ptp-images
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
