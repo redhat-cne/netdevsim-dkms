@@ -90,6 +90,9 @@ struct nsim_dpll {
 	struct dpll_device *eec_dpll;
 	struct dpll_pin *gnss_pin;
 	struct nsim_dpll_pin gnss_pin_priv;
+	struct dpll_pin *ext_pins[4];
+	struct nsim_dpll_pin ext_pin_privs[4];
+	int num_ext_pins;
 	struct list_head port_pins;
 	u64 clock_id;
 	struct gnss_device *gnss_dev;
