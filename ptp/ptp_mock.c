@@ -238,7 +238,7 @@ struct mock_phc *mock_phc_create(struct device *dev, int logical_clk_id)
 	hrtimer_init(&phc->extts_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	phc->extts_timer.function = mock_phc_extts_timer;
 
-	timecounter_init(&phc->tc, &phc->cc, ktime_get_real_ns());
+	timecounter_init(&phc->tc, &phc->cc, ktime_get_clocktai_ns());
 
 	phc->clock = ptp_clock_register(&phc->info, dev);
 	if (IS_ERR(phc->clock)) {
