@@ -2,8 +2,12 @@
 /*
  * DPLL emulation for netdevsim
  *
- * Registers a pair of DPLL devices (PPS + EEC) that always report
- * LOCKED_HO_ACQ status, and a GNSS input pin with zero phase offset.
+ * Registers a pair of DPLL devices (PPS + EEC) with a dynamic DPLL
+ * state machine that reacts to GNSS signal changes.  When GNSS fix is
+ * lost (via NMEA GGA quality 0), the DPLL transitions:
+ *   LOCKED_HO_ACQ → HOLDOVER → UNLOCKED (after holdover timeout)
+ * When fix is restored, the DPLL returns to LOCKED_HO_ACQ.
+ *
  * Each PF netdev gets a SyncE-type output pin associated via
  * dpll_netdev_pin_set so the linuxptp-daemon can discover the DPLL
  * through netlink.
@@ -27,6 +31,60 @@
 #define NSIM_DPLL_EEC_IDX	1
 #define NSIM_DPLL_GNSS_PIN_IDX	0
 
+#define NSIM_DPLL_HOLDOVER_MS_DEFAULT	15000
+
+/* ---- DPLL state machine ------------------------------------------------ */
+
+static void nsim_dpll_set_status(struct nsim_dpll *ndpll,
+				 enum dpll_lock_status new_status)
+{
+	if (ndpll->lock_status == new_status)
+		return;
+
+	pr_info("netdevsim: DPLL %s -> %s\n",
+		ndpll->lock_status == DPLL_LOCK_STATUS_LOCKED_HO_ACQ ? "LOCKED" :
+		ndpll->lock_status == DPLL_LOCK_STATUS_HOLDOVER ? "HOLDOVER" : "UNLOCKED",
+		new_status == DPLL_LOCK_STATUS_LOCKED_HO_ACQ ? "LOCKED" :
+		new_status == DPLL_LOCK_STATUS_HOLDOVER ? "HOLDOVER" : "UNLOCKED");
+
+	ndpll->lock_status = new_status;
+	dpll_device_change_ntf(ndpll->pps_dpll);
+	dpll_device_change_ntf(ndpll->eec_dpll);
+}
+
+/*
+ * Holdover timeout: transition HOLDOVER → UNLOCKED (freerun).
+ * Runs on system_wq after holdover_timeout_ms expires.
+ */
+static void nsim_dpll_holdover_timeout(struct work_struct *work)
+{
+	struct nsim_dpll *ndpll = container_of(work, struct nsim_dpll,
+					       holdover_work.work);
+
+	if (ndpll->lock_status == DPLL_LOCK_STATUS_HOLDOVER)
+		nsim_dpll_set_status(ndpll, DPLL_LOCK_STATUS_UNLOCKED);
+}
+
+/*
+ * Called when gnss_gps_fix changes.  Drives the DPLL state machine:
+ *   fix >= 2 (3D/DGPS)  → LOCKED_HO_ACQ  (cancel any holdover timer)
+ *   fix < 2  (NoFix/DR) → HOLDOVER        (start holdover timer)
+ */
+static void nsim_dpll_gnss_fix_changed(struct nsim_dpll *ndpll, u8 new_fix)
+{
+	if (new_fix >= 2) {
+		cancel_delayed_work(&ndpll->holdover_work);
+		nsim_dpll_set_status(ndpll, DPLL_LOCK_STATUS_LOCKED_HO_ACQ);
+	} else {
+		if (ndpll->lock_status == DPLL_LOCK_STATUS_LOCKED_HO_ACQ) {
+			ndpll->signal_lost_jiffies = jiffies;
+			nsim_dpll_set_status(ndpll, DPLL_LOCK_STATUS_HOLDOVER);
+			schedule_delayed_work(&ndpll->holdover_work,
+				msecs_to_jiffies(ndpll->holdover_timeout_ms));
+		}
+	}
+}
+
 /* ---- device ops -------------------------------------------------------- */
 
 static int nsim_dpll_mode_get(DPLL_DEVICE_CONST struct dpll_device *dpll,
@@ -43,7 +101,9 @@ static int nsim_dpll_lock_status_get(DPLL_DEVICE_CONST struct dpll_device *dpll,
 				     enum dpll_lock_status *status,
 				     struct netlink_ext_ack *extack)
 {
-	*status = DPLL_LOCK_STATUS_LOCKED_HO_ACQ;
+	struct nsim_dpll *ndpll = priv;
+
+	*status = ndpll->lock_status;
 	return 0;
 }
 #else
@@ -53,7 +113,9 @@ static int nsim_dpll_lock_status_get(DPLL_DEVICE_CONST struct dpll_device *dpll,
 				     enum dpll_lock_status_error *status_error,
 				     struct netlink_ext_ack *extack)
 {
-	*status = DPLL_LOCK_STATUS_LOCKED_HO_ACQ;
+	struct nsim_dpll *ndpll = priv;
+
+	*status = ndpll->lock_status;
 	*status_error = DPLL_LOCK_STATUS_ERROR_NONE;
 	return 0;
 }
@@ -384,9 +446,12 @@ static void nsim_parse_gga_fix(struct nsim_dpll *ndpll,
 					if (i + 1 < count &&
 					    buf[i + 1] >= '0' &&
 					    buf[i + 1] <= '9') {
-						ndpll->gnss_gps_fix =
-							nsim_gga_quality_to_gps_fix(
+						u8 old_fix = ndpll->gnss_gps_fix;
+						u8 new_fix = nsim_gga_quality_to_gps_fix(
 								buf[i + 1] - '0');
+						ndpll->gnss_gps_fix = new_fix;
+						if (new_fix != old_fix)
+							nsim_dpll_gnss_fix_changed(ndpll, new_fix);
 					}
 					return;
 				}
@@ -530,6 +595,9 @@ int nsim_dpll_init(struct nsim_dev *nsim_dev)
 		return -ENOMEM;
 
 	ndpll->clock_id = NSIM_DPLL_CLOCK_ID;
+	ndpll->lock_status = DPLL_LOCK_STATUS_LOCKED_HO_ACQ;
+	ndpll->holdover_timeout_ms = NSIM_DPLL_HOLDOVER_MS_DEFAULT;
+	INIT_DELAYED_WORK(&ndpll->holdover_work, nsim_dpll_holdover_timeout);
 	INIT_LIST_HEAD(&ndpll->port_pins);
 
 	/* PPS DPLL */
@@ -753,6 +821,7 @@ int nsim_dpll_init(struct nsim_dev *nsim_dev)
 err_ports_cleanup:
 	hrtimer_cancel(&ndpll->ntf_timer);
 	cancel_work_sync(&ndpll->ntf_work);
+	cancel_delayed_work_sync(&ndpll->holdover_work);
 	nsim_dpll_cleanup_port_pins(ndpll);
 err_ext_cleanup:
 	{
@@ -807,6 +876,7 @@ void nsim_dpll_exit(struct nsim_dev *nsim_dev)
 
 	hrtimer_cancel(&ndpll->ntf_timer);
 	cancel_work_sync(&ndpll->ntf_work);
+	cancel_delayed_work_sync(&ndpll->holdover_work);
 
 	if (ndpll->gnss_dev) {
 		ndpll->ubx_nav_enabled = false;

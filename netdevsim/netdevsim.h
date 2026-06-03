@@ -102,6 +102,11 @@ struct nsim_dpll {
 	spinlock_t gnss_lock;
 	bool ubx_nav_enabled;
 	u8 gnss_gps_fix;
+
+	enum dpll_lock_status lock_status;
+	unsigned long signal_lost_jiffies;
+	unsigned int holdover_timeout_ms;
+	struct delayed_work holdover_work;
 };
 
 struct nsim_ethtool_pauseparam {
