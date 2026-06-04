@@ -34,9 +34,12 @@ all:
 		modules
 
 clean:
-	$(MAKE) -C $(KDIR) M=$(PWD)/ptp clean
-	$(MAKE) -C $(KDIR) M=$(PWD)/dpll clean
-	$(MAKE) -C $(KDIR) M=$(PWD)/netdevsim clean
+	find $(PWD)/ptp $(PWD)/dpll $(PWD)/netdevsim \
+		\( -name '*.o' -o -name '*.ko' -o -name '*.ko.*' \
+		-o -name '*.mod' -o -name '*.mod.c' -o -name '*.mod.o' \
+		-o -name '.*.cmd' -o -name 'modules.order' \
+		-o -name 'Module.symvers' -o -name '.tmp_versions' \) \
+		-exec rm -rf {} + 2>/dev/null || true
 	rm -rf $(PWD)/rpmbuild $(PWD)/$(NAME)-$(VERSION).tar.gz
 
 tarball:
