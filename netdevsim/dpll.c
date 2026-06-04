@@ -135,12 +135,12 @@ static const struct dpll_pin_ops nsim_dpll_rclk_pin_ops = {
 
 /* ---- sysfs: writable lock_status for user-space DPLL control ----------- */
 
-static struct class *nsim_dpll_class;
-
-static ssize_t lock_status_show(struct device *dev,
-				struct device_attribute *attr, char *buf)
+static ssize_t nsim_dpll_lock_status_show(struct kobject *kobj,
+					  struct kobj_attribute *attr,
+					  char *buf)
 {
-	struct nsim_dpll *ndpll = dev_get_drvdata(dev);
+	struct nsim_dpll *ndpll = container_of(attr, struct nsim_dpll,
+					       lock_status_attr);
 
 	switch (ndpll->lock_status) {
 	case DPLL_LOCK_STATUS_LOCKED_HO_ACQ:
@@ -154,11 +154,12 @@ static ssize_t lock_status_show(struct device *dev,
 	}
 }
 
-static ssize_t lock_status_store(struct device *dev,
-				 struct device_attribute *attr,
-				 const char *buf, size_t count)
+static ssize_t nsim_dpll_lock_status_store(struct kobject *kobj,
+					   struct kobj_attribute *attr,
+					   const char *buf, size_t count)
 {
-	struct nsim_dpll *ndpll = dev_get_drvdata(dev);
+	struct nsim_dpll *ndpll = container_of(attr, struct nsim_dpll,
+					       lock_status_attr);
 	enum dpll_lock_status new_status;
 
 	if (sysfs_streq(buf, "locked"))
@@ -178,8 +179,6 @@ static ssize_t lock_status_store(struct device *dev,
 
 	return count;
 }
-
-static DEVICE_ATTR_RW(lock_status);
 
 /* ---- UBX protocol simulation ------------------------------------------- */
 
@@ -780,25 +779,38 @@ int nsim_dpll_init(struct nsim_dev *nsim_dev)
 			gdev->id);
 	}
 
-	/* Writable sysfs interface: /sys/class/nsim_dpll/dpll0/lock_status */
-	nsim_dpll_class = class_create("nsim_dpll");
-	if (IS_ERR(nsim_dpll_class)) {
-		err = PTR_ERR(nsim_dpll_class);
-		nsim_dpll_class = NULL;
-		goto err_gnss_cleanup;
-	}
+	/*
+	 * Writable sysfs: <pci-dev>/dpll/lock_status
+	 * Uses a per-instance kobject (no global class) so multiple WPC
+	 * devices can coexist without sysfs name collisions.
+	 */
+	{
+		struct device *parent_dev;
+		struct kobject *parent_kobj;
 
-	ndpll->sysfs_dev = device_create(nsim_dpll_class, NULL,
-					 MKDEV(0, 0), ndpll, "dpll0");
-	if (IS_ERR(ndpll->sysfs_dev)) {
-		err = PTR_ERR(ndpll->sysfs_dev);
-		ndpll->sysfs_dev = NULL;
-		goto err_class_destroy;
-	}
+		if (nsim_dev->fake_pci_dev)
+			parent_dev = &nsim_dev->fake_pci_dev->dev;
+		else
+			parent_dev = &nsim_dev->nsim_bus_dev->dev;
 
-	err = device_create_file(ndpll->sysfs_dev, &dev_attr_lock_status);
-	if (err)
-		goto err_sysfs_dev_destroy;
+		parent_kobj = &parent_dev->kobj;
+		ndpll->sysfs_kobj = kobject_create_and_add("dpll",
+							    parent_kobj);
+		if (!ndpll->sysfs_kobj) {
+			err = -ENOMEM;
+			goto err_gnss_cleanup;
+		}
+
+		ndpll->lock_status_attr.attr.name = "lock_status";
+		ndpll->lock_status_attr.attr.mode = 0644;
+		ndpll->lock_status_attr.show = nsim_dpll_lock_status_show;
+		ndpll->lock_status_attr.store = nsim_dpll_lock_status_store;
+
+		err = sysfs_create_file(ndpll->sysfs_kobj,
+					&ndpll->lock_status_attr.attr);
+		if (err)
+			goto err_sysfs_kobj;
+	}
 
 	/*
 	 * Emit change notifications so that userspace consumers (e.g.
@@ -826,12 +838,9 @@ int nsim_dpll_init(struct nsim_dev *nsim_dev)
 		ndpll->clock_id);
 	return 0;
 
-err_sysfs_dev_destroy:
-	device_destroy(nsim_dpll_class, MKDEV(0, 0));
-	ndpll->sysfs_dev = NULL;
-err_class_destroy:
-	class_destroy(nsim_dpll_class);
-	nsim_dpll_class = NULL;
+err_sysfs_kobj:
+	kobject_put(ndpll->sysfs_kobj);
+	ndpll->sysfs_kobj = NULL;
 err_gnss_cleanup:
 	if (ndpll->gnss_dev) {
 		ndpll->ubx_nav_enabled = false;
@@ -895,14 +904,11 @@ void nsim_dpll_exit(struct nsim_dev *nsim_dev)
 	if (!ndpll)
 		return;
 
-	if (ndpll->sysfs_dev) {
-		device_remove_file(ndpll->sysfs_dev, &dev_attr_lock_status);
-		device_destroy(nsim_dpll_class, MKDEV(0, 0));
-		ndpll->sysfs_dev = NULL;
-	}
-	if (nsim_dpll_class) {
-		class_destroy(nsim_dpll_class);
-		nsim_dpll_class = NULL;
+	if (ndpll->sysfs_kobj) {
+		sysfs_remove_file(ndpll->sysfs_kobj,
+				  &ndpll->lock_status_attr.attr);
+		kobject_put(ndpll->sysfs_kobj);
+		ndpll->sysfs_kobj = NULL;
 	}
 
 	hrtimer_cancel(&ndpll->ntf_timer);
