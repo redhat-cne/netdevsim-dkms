@@ -4,8 +4,12 @@
  *
  * Mock-up PTP Hardware Clock driver for virtual network devices
  *
- * Create a PTP clock which offers PTP time manipulation operations
- * using a timecounter/cyclecounter on top of CLOCK_MONOTONIC_RAW.
+ * The PHC time is derived from CLOCK_TAI plus an accumulated offset.
+ * adjfine() applies a frequency correction on top of the TAI base so
+ * the PTP servo feedback loop operates normally.  Because the base
+ * clock already tracks wall time, the servo converges at freq ≈ 0 and
+ * the PHC stays within microseconds of real TAI — exactly what CI
+ * tests need.
  *
  * Two PTP pins are exposed so PTP_PIN_SETFUNC2 with pin index 1 (typical for
  * 1PPS input on Intel-style devices) succeeds; both may map EXTTS to channel 0.
@@ -15,27 +19,9 @@
 #include <linux/ptp_mock.h>
 #include <linux/kernel.h>
 #include <linux/string.h>
-#include <linux/timecounter.h>
 #include <linux/ktime.h>
 
-/* Clamp scaled_ppm between -32,768,000,000 and 32,768,000,000,
- * and thus "adj" between -1,073,741,824 and 1,073,741,824
- */
-#define MOCK_PHC_MAX_ADJ_PPB		500000000
-/* Timestamps from ktime_get_clocktai() have 1 ns resolution, so the scale factor
- * (MULT >> SHIFT) needs to be 1. Pick SHIFT as 31 bits, which translates
- * MULT(freq 0) into 0x80000000.
- */
-#define MOCK_PHC_CC_SHIFT		31
-#define MOCK_PHC_CC_MULT		(1 << MOCK_PHC_CC_SHIFT)
-#define MOCK_PHC_FADJ_SHIFT		9
-#define MOCK_PHC_FADJ_DENOMINATOR	15625ULL
-
-/* The largest cycle_delta that timecounter_read_delta() can handle without a
- * 64-bit overflow during the multiplication with cc->mult, given the max "adj"
- * we permit, is ~5.7 seconds. Make sure readouts are more frequent than that.
- */
-#define MOCK_PHC_REFRESH_INTERVAL	(HZ * 3)
+#define MOCK_PHC_MAX_ADJ_PPB	500000000
 
 #define info_to_phc(d) container_of((d), struct mock_phc, info)
 
@@ -45,23 +31,35 @@ struct ptp_clock_info *mock_phc_get_ptp_info(struct mock_phc *phc)
 }
 EXPORT_SYMBOL_GPL(mock_phc_get_ptp_info);
 
-static u64 mock_phc_cc_read(CYCLECOUNTER_READ_CONST struct cyclecounter *cc)
+/*
+ * Advance the internal bookkeeping: accumulate the frequency-induced
+ * drift since the last update and snapshot the current TAI time.
+ * Returns the PHC time = TAI + accumulated offset.
+ * Must be called with phc->lock held.
+ */
+static u64 mock_phc_read_locked(struct mock_phc *phc)
 {
-	return ktime_get_clocktai_ns();
+	u64 tai = ktime_get_clocktai_ns();
+	s64 elapsed = (s64)(tai - phc->last_tai_ns);
+	s64 drift;
+
+	if (elapsed > 0 && phc->freq_ppb != 0) {
+		drift = div_s64(elapsed * phc->freq_ppb, 1000000000LL);
+		phc->offset_ns += drift;
+	}
+	phc->last_tai_ns = tai;
+
+	return (u64)((s64)tai + phc->offset_ns);
 }
 
 static int mock_phc_adjfine(struct ptp_clock_info *info, long scaled_ppm)
 {
 	struct mock_phc *phc = info_to_phc(info);
 	unsigned long flags;
-	s64 adj;
-
-	adj = (s64)scaled_ppm << MOCK_PHC_FADJ_SHIFT;
-	adj = div_s64(adj, MOCK_PHC_FADJ_DENOMINATOR);
 
 	spin_lock_irqsave(&phc->lock, flags);
-	timecounter_read(&phc->tc);
-	phc->cc.mult = MOCK_PHC_CC_MULT + adj;
+	mock_phc_read_locked(phc);
+	phc->freq_ppb = div_s64((s64)scaled_ppm * 1000LL, 65536LL);
 	spin_unlock_irqrestore(&phc->lock, flags);
 
 	return 0;
@@ -73,7 +71,8 @@ static int mock_phc_adjtime(struct ptp_clock_info *info, s64 delta)
 	unsigned long flags;
 
 	spin_lock_irqsave(&phc->lock, flags);
-	timecounter_adjtime(&phc->tc, delta);
+	mock_phc_read_locked(phc);
+	phc->offset_ns += delta;
 	spin_unlock_irqrestore(&phc->lock, flags);
 
 	return 0;
@@ -83,38 +82,33 @@ static int mock_phc_settime64(struct ptp_clock_info *info,
 			      const struct timespec64 *ts)
 {
 	struct mock_phc *phc = info_to_phc(info);
-	u64 ns = timespec64_to_ns(ts);
 	unsigned long flags;
+	u64 tai;
 
 	spin_lock_irqsave(&phc->lock, flags);
-	timecounter_init(&phc->tc, &phc->cc, ns);
+	tai = ktime_get_clocktai_ns();
+	phc->last_tai_ns = tai;
+	phc->offset_ns = (s64)(timespec64_to_ns(ts)) - (s64)tai;
+	phc->freq_ppb = 0;
 	spin_unlock_irqrestore(&phc->lock, flags);
 
 	return 0;
 }
 
-static int mock_phc_gettime64(struct ptp_clock_info *info, struct timespec64 *ts)
+static int mock_phc_gettime64(struct ptp_clock_info *info,
+			      struct timespec64 *ts)
 {
 	struct mock_phc *phc = info_to_phc(info);
 	unsigned long flags;
 	u64 ns;
 
 	spin_lock_irqsave(&phc->lock, flags);
-	ns = timecounter_read(&phc->tc);
+	ns = mock_phc_read_locked(phc);
 	spin_unlock_irqrestore(&phc->lock, flags);
 
 	*ts = ns_to_timespec64(ns);
 
 	return 0;
-}
-
-static long mock_phc_refresh(struct ptp_clock_info *info)
-{
-	struct timespec64 ts;
-
-	mock_phc_gettime64(info, &ts);
-
-	return MOCK_PHC_REFRESH_INTERVAL;
 }
 
 static enum hrtimer_restart mock_phc_extts_timer(struct hrtimer *timer)
@@ -124,14 +118,8 @@ static enum hrtimer_restart mock_phc_extts_timer(struct hrtimer *timer)
 	unsigned long flags;
 	u64 ns;
 
-	/*
-	 * Capture the PHC's own time at the PPS edge, just like real
-	 * hardware latches its internal counter on the external 1PPS
-	 * input.  ts2phc compares this with the NMEA-derived time and
-	 * steps/adjusts the PHC to converge.
-	 */
 	spin_lock_irqsave(&phc->lock, flags);
-	ns = timecounter_read(&phc->tc);
+	ns = mock_phc_read_locked(phc);
 	spin_unlock_irqrestore(&phc->lock, flags);
 
 	event.type = PTP_CLOCK_EXTTS;
@@ -157,23 +145,12 @@ static int mock_phc_enable(struct ptp_clock_info *info,
 	switch (rq->type) {
 	case PTP_CLK_REQ_EXTTS: {
 		u64 now_ns, ns_to_next;
-		unsigned long flags;
 
 		if (rq->extts.index >= info->n_ext_ts)
 			return -EINVAL;
 		if (on) {
 			phc->extts_channel = rq->extts.index;
 			phc->extts_enabled = true;
-			/*
-			 * Re-sync the PHC timecounter to current TAI so
-			 * ts2phc starts with a near-zero offset regardless
-			 * of how much wall-clock time elapsed since the
-			 * device was created (boot-time NTP step, etc.).
-			 */
-			spin_lock_irqsave(&phc->lock, flags);
-			timecounter_init(&phc->tc, &phc->cc,
-					 ktime_get_clocktai_ns());
-			spin_unlock_irqrestore(&phc->lock, flags);
 
 			now_ns = ktime_get_real_ns();
 			ns_to_next = NSEC_PER_SEC -
@@ -236,19 +213,11 @@ struct mock_phc *mock_phc_create(struct device *dev, int logical_clk_id)
 		.adjtime	= mock_phc_adjtime,
 		.gettime64	= mock_phc_gettime64,
 		.settime64	= mock_phc_settime64,
-		.do_aux_work	= mock_phc_refresh,
 		.enable		= mock_phc_enable,
 		.verify		= mock_phc_verify,
 	};
 
 	phc->logical_clk_id = logical_clk_id;
-
-	phc->cc = (struct cyclecounter) {
-		.read	= mock_phc_cc_read,
-		.mask	= CYCLECOUNTER_MASK(64),
-		.mult	= MOCK_PHC_CC_MULT,
-		.shift	= MOCK_PHC_CC_SHIFT,
-	};
 
 	spin_lock_init(&phc->lock);
 	kref_init(&phc->ref);
@@ -256,15 +225,15 @@ struct mock_phc *mock_phc_create(struct device *dev, int logical_clk_id)
 	hrtimer_init(&phc->extts_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	phc->extts_timer.function = mock_phc_extts_timer;
 
-	timecounter_init(&phc->tc, &phc->cc, ktime_get_clocktai_ns());
+	phc->last_tai_ns = ktime_get_clocktai_ns();
+	phc->offset_ns = 0;
+	phc->freq_ppb = 0;
 
 	phc->clock = ptp_clock_register(&phc->info, dev);
 	if (IS_ERR(phc->clock)) {
 		err = PTR_ERR(phc->clock);
 		goto out_free_phc;
 	}
-
-	ptp_schedule_worker(phc->clock, MOCK_PHC_REFRESH_INTERVAL);
 
 	return phc;
 
@@ -286,12 +255,12 @@ static void mock_phc_destroy(struct kref *ref)
 
 void mock_phc_release(struct mock_phc *phc)
 {
-	pr_info("Releasing mock phc. Current ref count before kref_put: %u\n", kref_read(&phc->ref));
+	pr_info("Releasing mock phc. Current ref count before kref_put: %u\n",
+		kref_read(&phc->ref));
 
 	kref_put(&phc->ref, mock_phc_destroy);
 }
 EXPORT_SYMBOL_GPL(mock_phc_release);
-
 
 MODULE_DESCRIPTION("Mock-up PTP Hardware Clock driver");
 MODULE_LICENSE("GPL");
