@@ -22,7 +22,7 @@
  * and thus "adj" between -1,073,741,824 and 1,073,741,824
  */
 #define MOCK_PHC_MAX_ADJ_PPB		500000000
-/* Timestamps from ktime_get_raw() have 1 ns resolution, so the scale factor
+/* Timestamps from ktime_get_clocktai() have 1 ns resolution, so the scale factor
  * (MULT >> SHIFT) needs to be 1. Pick SHIFT as 31 bits, which translates
  * MULT(freq 0) into 0x80000000.
  */
@@ -47,7 +47,7 @@ EXPORT_SYMBOL_GPL(mock_phc_get_ptp_info);
 
 static u64 mock_phc_cc_read(CYCLECOUNTER_READ_CONST struct cyclecounter *cc)
 {
-	return ktime_get_raw_ns();
+	return ktime_get_clocktai_ns();
 }
 
 static int mock_phc_adjfine(struct ptp_clock_info *info, long scaled_ppm)
