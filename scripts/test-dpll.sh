@@ -169,6 +169,16 @@ cleanup_all_devices() {
     sleep 0.5
 }
 
+# Return the sysfs lock_status path for a given device id.
+# Path: /sys/bus/pci/devices/<pci_addr>/dpll/lock_status
+dpll_sysfs_path() {
+    local id="${1:-1}"
+    local pci_prefix
+    pci_prefix=$(get_pci_domain)
+    local pci_addr="${pci_prefix}:$(printf '%02x' "$((id + 1))").0"
+    echo "/sys/bus/pci/devices/${pci_addr}/dpll/lock_status"
+}
+
 HAS_GENL=false
 check_genl_tool() {
     if command -v python3 >/dev/null 2>&1; then
@@ -358,17 +368,16 @@ log "2. Device creation with wpc=1"
 cleanup_all_devices
 create_device 1 1 2 1 1
 
+DPLL_SYSFS=$(dpll_sysfs_path 1)
+
 assert_file_exists "netdevsim1 bus device exists" \
     /sys/bus/netdevsim/devices/netdevsim1
 
-assert_file_exists "sysfs class nsim_dpll exists" \
-    /sys/class/nsim_dpll
-
-assert_file_exists "sysfs dpll0 device exists" \
-    /sys/class/nsim_dpll/dpll0
+assert_file_exists "sysfs dpll dir exists" \
+    "$(dirname "$DPLL_SYSFS")"
 
 assert_file_exists "sysfs lock_status attribute exists" \
-    /sys/class/nsim_dpll/dpll0/lock_status
+    "$DPLL_SYSFS"
 
 echo
 
@@ -377,7 +386,7 @@ echo
 # -------------------------------------------------------------------
 log "3. Sysfs lock_status — default value"
 
-STATUS=$(cat /sys/class/nsim_dpll/dpll0/lock_status)
+STATUS=$(cat $DPLL_SYSFS)
 assert_eq "default lock_status is 'locked'" "locked" "$STATUS"
 
 echo
@@ -387,16 +396,16 @@ echo
 # -------------------------------------------------------------------
 log "4. Sysfs lock_status — write transitions"
 
-echo "holdover" > /sys/class/nsim_dpll/dpll0/lock_status
-STATUS=$(cat /sys/class/nsim_dpll/dpll0/lock_status)
+echo "holdover" > $DPLL_SYSFS
+STATUS=$(cat $DPLL_SYSFS)
 assert_eq "write 'holdover' -> read 'holdover'" "holdover" "$STATUS"
 
-echo "freerun" > /sys/class/nsim_dpll/dpll0/lock_status
-STATUS=$(cat /sys/class/nsim_dpll/dpll0/lock_status)
+echo "freerun" > $DPLL_SYSFS
+STATUS=$(cat $DPLL_SYSFS)
 assert_eq "write 'freerun' -> read 'freerun'" "freerun" "$STATUS"
 
-echo "locked" > /sys/class/nsim_dpll/dpll0/lock_status
-STATUS=$(cat /sys/class/nsim_dpll/dpll0/lock_status)
+echo "locked" > $DPLL_SYSFS
+STATUS=$(cat $DPLL_SYSFS)
 assert_eq "write 'locked' -> read 'locked'" "locked" "$STATUS"
 
 echo
@@ -406,8 +415,8 @@ echo
 # -------------------------------------------------------------------
 log "5. Sysfs lock_status — idempotent write"
 
-echo "locked" > /sys/class/nsim_dpll/dpll0/lock_status
-STATUS=$(cat /sys/class/nsim_dpll/dpll0/lock_status)
+echo "locked" > $DPLL_SYSFS
+STATUS=$(cat $DPLL_SYSFS)
 assert_eq "writing same value is idempotent" "locked" "$STATUS"
 
 echo
@@ -417,22 +426,22 @@ echo
 # -------------------------------------------------------------------
 log "6. Sysfs lock_status — invalid input"
 
-if echo "bogus" > /sys/class/nsim_dpll/dpll0/lock_status 2>/dev/null; then
+if echo "bogus" > $DPLL_SYSFS 2>/dev/null; then
     fail "writing 'bogus' should have returned error"
 else
     pass "writing 'bogus' correctly rejected"
 fi
 
-STATUS=$(cat /sys/class/nsim_dpll/dpll0/lock_status)
+STATUS=$(cat $DPLL_SYSFS)
 assert_eq "lock_status unchanged after invalid write" "locked" "$STATUS"
 
-if echo "" > /sys/class/nsim_dpll/dpll0/lock_status 2>/dev/null; then
+if echo "" > $DPLL_SYSFS 2>/dev/null; then
     fail "writing empty string should have returned error"
 else
     pass "writing empty string correctly rejected"
 fi
 
-if echo "LOCKED" > /sys/class/nsim_dpll/dpll0/lock_status 2>/dev/null; then
+if echo "LOCKED" > $DPLL_SYSFS 2>/dev/null; then
     fail "writing 'LOCKED' (uppercase) should have returned error"
 else
     pass "writing 'LOCKED' (uppercase) correctly rejected"
@@ -446,8 +455,8 @@ echo
 log "7. Sysfs lock_status — full state cycle"
 
 for state in locked holdover freerun holdover locked freerun locked; do
-    echo "$state" > /sys/class/nsim_dpll/dpll0/lock_status
-    STATUS=$(cat /sys/class/nsim_dpll/dpll0/lock_status)
+    echo "$state" > $DPLL_SYSFS
+    STATUS=$(cat $DPLL_SYSFS)
     assert_eq "cycle: write '$state' -> read '$state'" "$state" "$STATUS"
 done
 
@@ -586,7 +595,7 @@ log "13. Sysfs/netlink lock_status consistency"
 
 if [[ "$HAS_GENL" == true ]]; then
     for sysfs_val in holdover freerun locked; do
-        echo "$sysfs_val" > /sys/class/nsim_dpll/dpll0/lock_status
+        echo "$sysfs_val" > $DPLL_SYSFS
         sleep 0.2
 
         DEVICES_JSON=$(genl_dpll_device_dump)
@@ -610,7 +619,7 @@ else:
             "$EXPECTED_NL" "$NL_STATUS"
     done
 
-    echo "locked" > /sys/class/nsim_dpll/dpll0/lock_status
+    echo "locked" > $DPLL_SYSFS
 else
     skip "python3 not available — skipping sysfs/netlink consistency tests"
 fi
@@ -679,10 +688,11 @@ create_device 2 1 2 1 0
 assert_file_exists "netdevsim2 bus device exists (wpc=0)" \
     /sys/bus/netdevsim/devices/netdevsim2
 
-if [[ -d /sys/class/nsim_dpll/dpll0 ]]; then
-    fail "sysfs dpll0 should NOT exist with wpc=0"
+WPC0_DPLL_DIR=$(dirname "$(dpll_sysfs_path 2)")
+if [[ -d "$WPC0_DPLL_DIR" ]]; then
+    fail "sysfs dpll dir should NOT exist with wpc=0"
 else
-    pass "sysfs dpll0 correctly absent with wpc=0"
+    pass "sysfs dpll dir correctly absent with wpc=0"
 fi
 
 delete_device 2
@@ -696,19 +706,20 @@ log "16. Device teardown and re-creation"
 
 cleanup_all_devices
 
-assert_file_not_exists "sysfs dpll0 absent after teardown" \
-    /sys/class/nsim_dpll/dpll0
+DPLL_SYSFS=$(dpll_sysfs_path 1)
+assert_file_not_exists "sysfs dpll dir absent after teardown" \
+    "$(dirname "$DPLL_SYSFS")"
 
 create_device 1 1 2 1 1
 
-assert_file_exists "sysfs dpll0 re-appears after re-creation" \
-    /sys/class/nsim_dpll/dpll0
+assert_file_exists "sysfs dpll dir re-appears after re-creation" \
+    "$(dirname "$DPLL_SYSFS")"
 
-STATUS=$(cat /sys/class/nsim_dpll/dpll0/lock_status)
+STATUS=$(cat $DPLL_SYSFS)
 assert_eq "lock_status defaults to 'locked' after re-creation" "locked" "$STATUS"
 
-echo "holdover" > /sys/class/nsim_dpll/dpll0/lock_status
-STATUS=$(cat /sys/class/nsim_dpll/dpll0/lock_status)
+echo "holdover" > $DPLL_SYSFS
+STATUS=$(cat $DPLL_SYSFS)
 assert_eq "lock_status writable after re-creation" "holdover" "$STATUS"
 
 echo
@@ -721,11 +732,11 @@ log "17. Rapid state transitions (stress)"
 RAPID_PASS=true
 for _ in $(seq 1 50); do
     for state in locked holdover freerun; do
-        echo "$state" > /sys/class/nsim_dpll/dpll0/lock_status
+        echo "$state" > $DPLL_SYSFS
     done
 done
 
-FINAL=$(cat /sys/class/nsim_dpll/dpll0/lock_status)
+FINAL=$(cat $DPLL_SYSFS)
 assert_eq "lock_status consistent after 150 rapid writes" "freerun" "$FINAL"
 
 echo
