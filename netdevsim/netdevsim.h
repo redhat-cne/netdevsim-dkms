@@ -102,6 +102,8 @@ struct nsim_dpll {
 	spinlock_t gnss_lock;
 	bool ubx_nav_enabled;
 	u8 gnss_gps_fix;
+	enum dpll_lock_status lock_status;
+	struct device *sysfs_dev;
 };
 
 struct nsim_ethtool_pauseparam {
