@@ -126,10 +126,16 @@ jobs:
           IFACE=$(ls /sys/bus/pci/devices/${DOMAIN}:${BUS}:02.0/net/ 2>/dev/null | head -1)
           [ -n "$IFACE" ] && ethtool -T "$IFACE" || echo "WARN: No interface found"
 
+      - name: DPLL unit tests
+        if: steps.load.outputs.load_ok == 'true'
+        run: sudo ./scripts/test-dpll.sh --no-load
+
       - name: Cleanup
         if: always()
         run: |
-          echo "1" | sudo tee /sys/bus/netdevsim/del_device 2>/dev/null || true
+          for id in $(ls /sys/bus/netdevsim/devices/ 2>/dev/null | sed 's/netdevsim//'); do
+            echo "$id" | sudo tee /sys/bus/netdevsim/del_device 2>/dev/null || true
+          done
           sudo rmmod netdevsim nsim_dpll nsim_ptp_mock nsim_ptp 2>/dev/null || true
           sudo dkms remove ${DKMS_PKG}/${DKMS_VER} --all 2>/dev/null || true
 
