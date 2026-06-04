@@ -121,16 +121,22 @@ static enum hrtimer_restart mock_phc_extts_timer(struct hrtimer *timer)
 {
 	struct mock_phc *phc = container_of(timer, struct mock_phc, extts_timer);
 	struct ptp_clock_event event;
+	unsigned long flags;
+	u64 ns;
 
 	/*
-	 * Report the TAI second boundary as the EXTTS timestamp.  ts2phc
-	 * converts NMEA (UTC) to TAI via its leap-second file, so the
-	 * EXTTS timestamp must also be in TAI for offset ≈ 0.
+	 * Capture the PHC's own time at the PPS edge, just like real
+	 * hardware latches its internal counter on the external 1PPS
+	 * input.  ts2phc compares this with the NMEA-derived time and
+	 * steps/adjusts the PHC to converge.
 	 */
+	spin_lock_irqsave(&phc->lock, flags);
+	ns = timecounter_read(&phc->tc);
+	spin_unlock_irqrestore(&phc->lock, flags);
+
 	event.type = PTP_CLOCK_EXTTS;
 	event.index = phc->extts_channel;
-	event.timestamp = div64_u64(ktime_get_clocktai_ns(),
-				    NSEC_PER_SEC) * NSEC_PER_SEC;
+	event.timestamp = ns;
 	ptp_clock_event(phc->clock, &event);
 
 	hrtimer_forward_now(timer, ns_to_ktime(NSEC_PER_SEC));
@@ -151,12 +157,24 @@ static int mock_phc_enable(struct ptp_clock_info *info,
 	switch (rq->type) {
 	case PTP_CLK_REQ_EXTTS: {
 		u64 now_ns, ns_to_next;
+		unsigned long flags;
 
 		if (rq->extts.index >= info->n_ext_ts)
 			return -EINVAL;
 		if (on) {
 			phc->extts_channel = rq->extts.index;
 			phc->extts_enabled = true;
+			/*
+			 * Re-sync the PHC timecounter to current TAI so
+			 * ts2phc starts with a near-zero offset regardless
+			 * of how much wall-clock time elapsed since the
+			 * device was created (boot-time NTP step, etc.).
+			 */
+			spin_lock_irqsave(&phc->lock, flags);
+			timecounter_init(&phc->tc, &phc->cc,
+					 ktime_get_clocktai_ns());
+			spin_unlock_irqrestore(&phc->lock, flags);
+
 			now_ns = ktime_get_real_ns();
 			ns_to_next = NSEC_PER_SEC -
 				     do_div(now_ns, NSEC_PER_SEC);
