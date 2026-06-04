@@ -16,11 +16,13 @@ struct device;
 struct mock_phc {
 	struct ptp_clock_info info;
 	struct ptp_clock *clock;
-	struct timecounter tc;
-	struct cyclecounter cc;
 	int logical_clk_id;
 	struct kref ref;
 	spinlock_t lock;
+	/* TAI-based timekeeping */
+	s64 offset_ns;		/* PHC = TAI + offset_ns */
+	s64 freq_ppb;		/* rate correction from adjfine */
+	u64 last_tai_ns;	/* TAI snapshot at last update */
 	/*
 	 * Two pins: index 0 unused, index 1 "GNSS1PPS" — matches common NIC
 	 * layouts and ts2phc defaults (e.g. ts2phc.pin_index 1 on ens1f0).
