@@ -271,7 +271,40 @@ ssh my-dev-vm
 If an SSH config entry for the VM name already exists, the script prompts
 you to remove it or pick a different `--vm-name`.
 
-### Testing
+### DPLL Unit Tests
+
+`scripts/test-dpll.sh` exercises the DPLL emulation in `netdevsim/dpll.c`.
+It requires root privileges and loaded modules:
+
+```bash
+# Run after DKMS install (modules will be loaded automatically)
+sudo ./scripts/test-dpll.sh
+
+# If modules are already loaded, skip load/unload
+sudo ./scripts/test-dpll.sh --no-load
+
+# Verbose mode (set -x)
+sudo ./scripts/test-dpll.sh --verbose
+```
+
+Or via `make`:
+
+```bash
+make test-dpll
+```
+
+The test suite covers:
+- Module loading (`nsim_dpll`, `netdevsim`)
+- Device creation with `wpc=1` (DPLL activation) and `wpc=0` (no DPLL)
+- Sysfs `lock_status` read/write/transitions/invalid input/rapid cycling
+- Generic netlink DPLL device and pin dump (PPS+EEC devices, GNSS/EXT/SyncE pins)
+- Sysfs-to-netlink lock status consistency
+- GNSS device presence and NMEA echo
+- PTP clock and network interface verification
+- Device teardown and re-creation
+- dmesg sanity (no kernel warnings/errors)
+
+### Testing with UTM
 
 `scripts/test-utm-ubuntu.sh` does the same VM setup plus smoke tests and
 (optionally) the full ptp-operator test suite.
