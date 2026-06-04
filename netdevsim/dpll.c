@@ -2,8 +2,9 @@
 /*
  * DPLL emulation for netdevsim
  *
- * Registers a pair of DPLL devices (PPS + EEC) that always report
- * LOCKED_HO_ACQ status, and a GNSS input pin with zero phase offset.
+ * Registers a pair of DPLL devices (PPS + EEC) with a user-space
+ * controllable lock_status via sysfs, and a GNSS input pin with
+ * zero phase offset.
  * Each PF netdev gets a SyncE-type output pin associated via
  * dpll_netdev_pin_set so the linuxptp-daemon can discover the DPLL
  * through netlink.
@@ -11,6 +12,7 @@
 
 #include <dkms_compat.h>
 
+#include <linux/device.h>
 #include <linux/dpll.h>
 #include <linux/gnss.h>
 #include <linux/hrtimer.h>
@@ -18,6 +20,7 @@
 #include <linux/netdevice.h>
 #include <linux/pci.h>
 #include <linux/string.h>
+#include <linux/sysfs.h>
 #include <linux/timekeeping.h>
 #include <linux/workqueue.h>
 #include "netdevsim.h"
@@ -43,7 +46,9 @@ static int nsim_dpll_lock_status_get(DPLL_DEVICE_CONST struct dpll_device *dpll,
 				     enum dpll_lock_status *status,
 				     struct netlink_ext_ack *extack)
 {
-	*status = DPLL_LOCK_STATUS_LOCKED_HO_ACQ;
+	struct nsim_dpll *ndpll = priv;
+
+	*status = ndpll->lock_status;
 	return 0;
 }
 #else
@@ -53,7 +58,9 @@ static int nsim_dpll_lock_status_get(DPLL_DEVICE_CONST struct dpll_device *dpll,
 				     enum dpll_lock_status_error *status_error,
 				     struct netlink_ext_ack *extack)
 {
-	*status = DPLL_LOCK_STATUS_LOCKED_HO_ACQ;
+	struct nsim_dpll *ndpll = priv;
+
+	*status = ndpll->lock_status;
 	*status_error = DPLL_LOCK_STATUS_ERROR_NONE;
 	return 0;
 }
@@ -125,6 +132,54 @@ static const struct dpll_pin_ops nsim_dpll_rclk_pin_ops = {
 	.state_on_dpll_get  = nsim_dpll_pin_state_on_dpll_get,
 	.phase_offset_get   = nsim_dpll_pin_phase_offset_get,
 };
+
+/* ---- sysfs: writable lock_status for user-space DPLL control ----------- */
+
+static struct class *nsim_dpll_class;
+
+static ssize_t lock_status_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct nsim_dpll *ndpll = dev_get_drvdata(dev);
+
+	switch (ndpll->lock_status) {
+	case DPLL_LOCK_STATUS_LOCKED_HO_ACQ:
+		return sysfs_emit(buf, "locked\n");
+	case DPLL_LOCK_STATUS_HOLDOVER:
+		return sysfs_emit(buf, "holdover\n");
+	case DPLL_LOCK_STATUS_UNLOCKED:
+		return sysfs_emit(buf, "freerun\n");
+	default:
+		return sysfs_emit(buf, "unknown\n");
+	}
+}
+
+static ssize_t lock_status_store(struct device *dev,
+				 struct device_attribute *attr,
+				 const char *buf, size_t count)
+{
+	struct nsim_dpll *ndpll = dev_get_drvdata(dev);
+	enum dpll_lock_status new_status;
+
+	if (sysfs_streq(buf, "locked"))
+		new_status = DPLL_LOCK_STATUS_LOCKED_HO_ACQ;
+	else if (sysfs_streq(buf, "holdover"))
+		new_status = DPLL_LOCK_STATUS_HOLDOVER;
+	else if (sysfs_streq(buf, "freerun"))
+		new_status = DPLL_LOCK_STATUS_UNLOCKED;
+	else
+		return -EINVAL;
+
+	if (new_status != ndpll->lock_status) {
+		ndpll->lock_status = new_status;
+		dpll_device_change_ntf(ndpll->pps_dpll);
+		dpll_device_change_ntf(ndpll->eec_dpll);
+	}
+
+	return count;
+}
+
+static DEVICE_ATTR_RW(lock_status);
 
 /* ---- UBX protocol simulation ------------------------------------------- */
 
@@ -530,6 +585,7 @@ int nsim_dpll_init(struct nsim_dev *nsim_dev)
 		return -ENOMEM;
 
 	ndpll->clock_id = NSIM_DPLL_CLOCK_ID;
+	ndpll->lock_status = DPLL_LOCK_STATUS_LOCKED_HO_ACQ;
 	INIT_LIST_HEAD(&ndpll->port_pins);
 
 	/* PPS DPLL */
@@ -724,6 +780,26 @@ int nsim_dpll_init(struct nsim_dev *nsim_dev)
 			gdev->id);
 	}
 
+	/* Writable sysfs interface: /sys/class/nsim_dpll/dpll0/lock_status */
+	nsim_dpll_class = class_create("nsim_dpll");
+	if (IS_ERR(nsim_dpll_class)) {
+		err = PTR_ERR(nsim_dpll_class);
+		nsim_dpll_class = NULL;
+		goto err_gnss_cleanup;
+	}
+
+	ndpll->sysfs_dev = device_create(nsim_dpll_class, NULL,
+					 MKDEV(0, 0), ndpll, "dpll0");
+	if (IS_ERR(ndpll->sysfs_dev)) {
+		err = PTR_ERR(ndpll->sysfs_dev);
+		ndpll->sysfs_dev = NULL;
+		goto err_class_destroy;
+	}
+
+	err = device_create_file(ndpll->sysfs_dev, &dev_attr_lock_status);
+	if (err)
+		goto err_sysfs_dev_destroy;
+
 	/*
 	 * Emit change notifications so that userspace consumers (e.g.
 	 * linuxptp-daemon) that subscribe to DPLL multicast before we
@@ -750,6 +826,20 @@ int nsim_dpll_init(struct nsim_dev *nsim_dev)
 		ndpll->clock_id);
 	return 0;
 
+err_sysfs_dev_destroy:
+	device_destroy(nsim_dpll_class, MKDEV(0, 0));
+	ndpll->sysfs_dev = NULL;
+err_class_destroy:
+	class_destroy(nsim_dpll_class);
+	nsim_dpll_class = NULL;
+err_gnss_cleanup:
+	if (ndpll->gnss_dev) {
+		ndpll->ubx_nav_enabled = false;
+		hrtimer_cancel(&ndpll->ubx_timer);
+		gnss_deregister_device(ndpll->gnss_dev);
+		gnss_put_device(ndpll->gnss_dev);
+		ndpll->gnss_dev = NULL;
+	}
 err_ports_cleanup:
 	hrtimer_cancel(&ndpll->ntf_timer);
 	cancel_work_sync(&ndpll->ntf_work);
@@ -804,6 +894,16 @@ void nsim_dpll_exit(struct nsim_dev *nsim_dev)
 
 	if (!ndpll)
 		return;
+
+	if (ndpll->sysfs_dev) {
+		device_remove_file(ndpll->sysfs_dev, &dev_attr_lock_status);
+		device_destroy(nsim_dpll_class, MKDEV(0, 0));
+		ndpll->sysfs_dev = NULL;
+	}
+	if (nsim_dpll_class) {
+		class_destroy(nsim_dpll_class);
+		nsim_dpll_class = NULL;
+	}
 
 	hrtimer_cancel(&ndpll->ntf_timer);
 	cancel_work_sync(&ndpll->ntf_work);
