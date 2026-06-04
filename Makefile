@@ -24,7 +24,7 @@ VERSION := 6.9.5
 CONTAINER_IMAGE ?= fedora:39
 CONTAINER_CMD   ?= podman
 
-.PHONY: all clean modules_install tarball rpm rpm-container test-utm
+.PHONY: all clean modules_install tarball rpm rpm-container test-utm test-dpll dkms-install dkms-uninstall
 
 all:
 	$(MAKE) -C $(KDIR) M=$(PWD)/ptp DKMS_INCLUDE=$(DKMS_INCLUDE) modules
@@ -67,6 +67,30 @@ rpm-container: tarball
 		$(CONTAINER_IMAGE) \
 		bash -c "dnf install -y rpm-build && rpmbuild -bb --define '_topdir /src/rpmbuild' $(NAME)-dkms.spec"
 	@echo "RPMs written to rpmbuild/RPMS/"
+
+DKMS_SRC := /usr/src/$(NAME)-$(VERSION)
+
+dkms-install: ## Install DKMS modules (requires root)
+	sudo mkdir -p $(DKMS_SRC)
+	sudo cp -a Makefile dkms.conf install-udev-rule.sh 99-nsim-ptp.rules \
+		include ptp dpll netdevsim $(DKMS_SRC)/
+	sudo dkms add $(NAME)/$(VERSION) 2>/dev/null || true
+	sudo dkms build $(NAME)/$(VERSION)
+	sudo dkms install --force $(NAME)/$(VERSION)
+	sudo cp $(DKMS_SRC)/99-nsim-ptp.rules /etc/udev/rules.d/
+	sudo udevadm control --reload-rules
+	@echo "Installed $(NAME)/$(VERSION) via DKMS"
+
+dkms-uninstall: ## Uninstall DKMS modules (requires root)
+	-sudo rmmod netdevsim nsim_dpll nsim_ptp_mock nsim_ptp 2>/dev/null
+	-sudo dkms remove $(NAME)/$(VERSION) --all 2>/dev/null
+	-sudo rm -rf $(DKMS_SRC)
+	-sudo rm -f /etc/udev/rules.d/99-nsim-ptp.rules
+	-sudo udevadm control --reload-rules
+	@echo "Uninstalled $(NAME)/$(VERSION)"
+
+test-dpll: ## Run DPLL unit tests (requires root, modules loaded)
+	sudo ./scripts/test-dpll.sh
 
 test-utm: rpm-container
 	./scripts/test-utm.sh \
