@@ -171,6 +171,11 @@ static ssize_t nsim_dpll_lock_status_store(struct kobject *kobj,
 	else
 		return -EINVAL;
 
+	/* When signal is blocked via UBX CFG-VALSET, the kernel controls
+	 * lock_status transitions; ignore sysfs writes from gnss-sim. */
+	if (ndpll->signal_blocked)
+		return count;
+
 	if (new_status != ndpll->lock_status) {
 		ndpll->lock_status = new_status;
 		dpll_device_change_ntf(ndpll->pps_dpll);
@@ -197,7 +202,11 @@ static ssize_t nsim_dpll_lock_status_store(struct kobject *kobj,
 #define UBX_NAV_CLOCK		0x22
 #define UBX_ACK_ACK		0x01
 #define UBX_CFG_MSG		0x01
+#define UBX_CFG_VALSET		0x8A
 #define UBX_MON_VER		0x04
+
+#define UBX_CFG_VALSET_HDR_LEN	4
+#define UBX_CFGKEY_INFIL_NCNOTHRS 0x201100aa
 
 #define UBX_NAV_STATUS_LEN	16
 #define UBX_NAV_CLOCK_LEN	20
@@ -478,12 +487,22 @@ static int nsim_gnss_write_raw(struct gnss_device *gdev,
 	if (!ndpll || count == 0)
 		return count;
 
-	/* NMEA sentence: parse GGA fix quality, then echo to read side */
+	/* NMEA sentence: parse GGA fix quality, then echo to read side.
+	 * When signal is blocked (via UBX CFG-VALSET INFIL_NCNOTHRS),
+	 * still forward NMEA so ts2phc keeps its time reference and the
+	 * PHC stays disciplined, but skip GGA parsing so gnss_gps_fix
+	 * stays at 0 (NoFix) — UBX NAV-STATUS reports the loss. */
 	if (buf[0] == '$') {
-		nsim_parse_gga_fix(ndpll, buf, count);
+		if (!ndpll->signal_blocked)
+			nsim_parse_gga_fix(ndpll, buf, count);
 		nsim_ubx_insert_locked(ndpll, buf, count);
 		return count;
 	}
+
+	// #region agent log
+	pr_info("netdevsim: d753ad gnss_write_raw: count=%zu first=0x%02x signal_blocked=%d\n",
+		count, buf[0], ndpll->signal_blocked);
+	// #endregion
 
 	/* UBX frame: sync(2) + class(1) + id(1) + len(2) minimum */
 	if (count < UBX_HDR_LEN || buf[0] != UBX_SYNC1 || buf[1] != UBX_SYNC2)
@@ -491,6 +510,11 @@ static int nsim_gnss_write_raw(struct gnss_device *gdev,
 
 	cls = buf[2];
 	id = buf[3];
+
+	// #region agent log
+	pr_info("netdevsim: d753ad UBX frame: cls=0x%02x id=0x%02x count=%zu\n",
+		cls, id, count);
+	// #endregion
 
 	switch (cls) {
 	case UBX_CLASS_MON:
@@ -514,6 +538,52 @@ static int nsim_gnss_write_raw(struct gnss_device *gdev,
 						      ns_to_ktime(NSEC_PER_SEC),
 						      HRTIMER_MODE_REL);
 				}
+			}
+
+			len = ubx_build_ack(resp, sizeof(resp), cls, id);
+			if (len > 0)
+				nsim_ubx_insert_locked(ndpll, resp, len);
+		} else if (id == UBX_CFG_VALSET &&
+			   count >= UBX_HDR_LEN + UBX_CFG_VALSET_HDR_LEN + 5) {
+			const u8 *kv = buf + UBX_HDR_LEN + UBX_CFG_VALSET_HDR_LEN;
+			size_t kv_end = count - UBX_CK_LEN;
+			size_t pos = UBX_HDR_LEN + UBX_CFG_VALSET_HDR_LEN;
+
+			// #region agent log
+			pr_info("netdevsim: d753ad CFG-VALSET: payload_start=%zu kv_end=%zu\n",
+				pos, kv_end);
+			// #endregion
+			while (pos + 4 < kv_end) {
+				u32 key = kv[0] | (kv[1] << 8) |
+					  (kv[2] << 16) | (kv[3] << 24);
+				kv += 4;
+				pos += 4;
+
+				// #region agent log
+				pr_info("netdevsim: d753ad CFG-VALSET key=0x%08x pos=%zu expect=0x%08x\n",
+					key, pos, UBX_CFGKEY_INFIL_NCNOTHRS);
+				// #endregion
+				if (key == UBX_CFGKEY_INFIL_NCNOTHRS && pos < kv_end) {
+					u8 val = *kv;
+
+					if (val > 0) {
+						ndpll->signal_blocked = true;
+						ndpll->gnss_gps_fix = 0x00;
+						ndpll->lock_status = DPLL_LOCK_STATUS_HOLDOVER;
+						pr_info("netdevsim: UBX CFG-VALSET INFIL_NCNOTHRS=%u → signal blocked, holdover\n", val);
+					} else {
+					ndpll->signal_blocked = false;
+					ndpll->gnss_gps_fix = 0x03;
+					ndpll->lock_status = DPLL_LOCK_STATUS_LOCKED_HO_ACQ;
+						pr_info("netdevsim: UBX CFG-VALSET INFIL_NCNOTHRS=0 → signal restored, locked\n");
+					}
+					schedule_work(&ndpll->ntf_work);
+					kv++;
+					pos++;
+					break;
+				}
+				kv++;
+				pos++;
 			}
 
 			len = ubx_build_ack(resp, sizeof(resp), cls, id);
@@ -774,6 +844,7 @@ int nsim_dpll_init(struct nsim_dev *nsim_dev)
 			     HRTIMER_MODE_REL);
 		ndpll->ubx_timer.function = nsim_ubx_timer_cb;
 		ndpll->ubx_nav_enabled = false;
+		ndpll->signal_blocked = false;
 		ndpll->gnss_gps_fix = 0x03;
 		pr_info("netdevsim: GNSS device registered (gnss%d)\n",
 			gdev->id);

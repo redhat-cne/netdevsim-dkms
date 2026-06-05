@@ -4,12 +4,11 @@
  *
  * Mock-up PTP Hardware Clock driver for virtual network devices
  *
- * The PHC time is derived from CLOCK_TAI plus an accumulated offset.
- * adjfine() applies a frequency correction on top of the TAI base so
- * the PTP servo feedback loop operates normally.  Because the base
- * clock already tracks wall time, the servo converges at freq ≈ 0 and
- * the PHC stays within microseconds of real TAI — exactly what CI
- * tests need.
+ * The PHC time is derived from CLOCK_MONOTONIC plus an accumulated offset.
+ * CLOCK_MONOTONIC never steps (immune to phc2sys stepping CLOCK_REALTIME/TAI)
+ * and its rate is NTP-adjusted so freq_ppb stays near zero.  adjfine()
+ * applies a frequency correction on top of this base so the PTP servo
+ * feedback loop operates normally.
  *
  * Two PTP pins are exposed so PTP_PIN_SETFUNC2 with pin index 1 (typical for
  * 1PPS input on Intel-style devices) succeeds; both may map EXTTS to channel 0.
@@ -33,23 +32,23 @@ EXPORT_SYMBOL_GPL(mock_phc_get_ptp_info);
 
 /*
  * Advance the internal bookkeeping: accumulate the frequency-induced
- * drift since the last update and snapshot the current TAI time.
- * Returns the PHC time = TAI + accumulated offset.
+ * drift since the last update and snapshot the monotonic time.
+ * Returns the PHC time = monotonic + accumulated offset.
  * Must be called with phc->lock held.
  */
 static u64 mock_phc_read_locked(struct mock_phc *phc)
 {
-	u64 tai = ktime_get_clocktai_ns();
-	s64 elapsed = (s64)(tai - phc->last_tai_ns);
+	u64 raw = ktime_get_ns();
+	s64 elapsed = (s64)(raw - phc->last_mono_ns);
 	s64 drift;
 
 	if (elapsed > 0 && phc->freq_ppb != 0) {
 		drift = div_s64(elapsed * phc->freq_ppb, 1000000000LL);
 		phc->offset_ns += drift;
 	}
-	phc->last_tai_ns = tai;
+	phc->last_mono_ns = raw;
 
-	return (u64)((s64)tai + phc->offset_ns);
+	return (u64)((s64)raw + phc->offset_ns);
 }
 
 static int mock_phc_adjfine(struct ptp_clock_info *info, long scaled_ppm)
@@ -83,12 +82,12 @@ static int mock_phc_settime64(struct ptp_clock_info *info,
 {
 	struct mock_phc *phc = info_to_phc(info);
 	unsigned long flags;
-	u64 tai;
+	u64 raw;
 
 	spin_lock_irqsave(&phc->lock, flags);
-	tai = ktime_get_clocktai_ns();
-	phc->last_tai_ns = tai;
-	phc->offset_ns = (s64)(timespec64_to_ns(ts)) - (s64)tai;
+	raw = ktime_get_ns();
+	phc->last_mono_ns = raw;
+	phc->offset_ns = (s64)(timespec64_to_ns(ts)) - (s64)raw;
 	phc->freq_ppb = 0;
 	spin_unlock_irqrestore(&phc->lock, flags);
 
@@ -117,17 +116,48 @@ static enum hrtimer_restart mock_phc_extts_timer(struct hrtimer *timer)
 	struct ptp_clock_event event;
 	unsigned long flags;
 	u64 ns;
+	s64 freq;
+	u64 sec;
+	u32 frac;
+	s64 delay;
+	s64 divisor;
 
 	spin_lock_irqsave(&phc->lock, flags);
 	ns = mock_phc_read_locked(phc);
+	freq = phc->freq_ppb;
 	spin_unlock_irqrestore(&phc->lock, flags);
+
+	/* Snap to the nearest second boundary.  Real 1PPS hardware fires
+	 * exactly at the boundary; the mock timer has jitter so we round. */
+	sec = ns;
+	frac = do_div(sec, NSEC_PER_SEC);
+
+	// #region agent log
+	pr_info("d753ad EXTTS: phc_ns=%llu frac_ns=%u offset_ns=%lld freq_ppb=%lld\n",
+		ns, frac, phc->offset_ns, freq);
+	// #endregion
+
+	if (frac >= NSEC_PER_SEC / 2)
+		ns = (sec + 1) * NSEC_PER_SEC;
+	else
+		ns = sec * NSEC_PER_SEC;
 
 	event.type = PTP_CLOCK_EXTTS;
 	event.index = phc->extts_channel;
 	event.timestamp = ns;
 	ptp_clock_event(phc->clock, &event);
 
-	hrtimer_forward_now(timer, ns_to_ktime(NSEC_PER_SEC));
+	/* Schedule the next event 1 PHC second later.  The PHC advances at
+	 * rate (1 + freq_ppb/1e9) relative to CLOCK_MONOTONIC, so scale:
+	 * mono_delay = 1e9 * 1e9 / (1e9 + freq).  */
+	divisor = 1000000000LL + freq;
+	if (divisor <= 0)
+		divisor = 1;
+	delay = div_s64((s64)NSEC_PER_SEC * 1000000000LL, divisor);
+	if (delay < NSEC_PER_SEC / 4)
+		delay = NSEC_PER_SEC / 4;
+
+	hrtimer_forward_now(timer, ns_to_ktime((u64)delay));
 	return HRTIMER_RESTART;
 }
 
@@ -149,10 +179,14 @@ static int mock_phc_enable(struct ptp_clock_info *info,
 		if (rq->extts.index >= info->n_ext_ts)
 			return -EINVAL;
 		if (on) {
+			unsigned long flags;
+
 			phc->extts_channel = rq->extts.index;
 			phc->extts_enabled = true;
 
-			now_ns = ktime_get_real_ns();
+			spin_lock_irqsave(&phc->lock, flags);
+			now_ns = mock_phc_read_locked(phc);
+			spin_unlock_irqrestore(&phc->lock, flags);
 			ns_to_next = NSEC_PER_SEC -
 				     do_div(now_ns, NSEC_PER_SEC);
 			hrtimer_start(&phc->extts_timer,
@@ -225,7 +259,7 @@ struct mock_phc *mock_phc_create(struct device *dev, int logical_clk_id)
 	hrtimer_init(&phc->extts_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	phc->extts_timer.function = mock_phc_extts_timer;
 
-	phc->last_tai_ns = ktime_get_clocktai_ns();
+	phc->last_mono_ns = ktime_get_ns();
 	phc->offset_ns = 0;
 	phc->freq_ppb = 0;
 

@@ -101,6 +101,7 @@ struct nsim_dpll {
 	struct work_struct ntf_work;
 	spinlock_t gnss_lock;
 	bool ubx_nav_enabled;
+	bool signal_blocked;
 	u8 gnss_gps_fix;
 	enum dpll_lock_status lock_status;
 	struct kobject *sysfs_kobj;

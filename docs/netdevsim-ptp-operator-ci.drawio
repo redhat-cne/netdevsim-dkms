@@ -1,0 +1,371 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net" agent="1.0" version="26.0.0">
+  <diagram name="Architecture" id="arch">
+    <mxGraphModel dx="2600" dy="2000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="2000" pageHeight="1600" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- TITLE -->
+        <mxCell id="title" value="netdevsim-dkms + ptp-operator CI — User-Space to Kernel Device Interactions" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=20;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="200" y="10" width="900" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- ============================================================ -->
+        <!-- CI PIPELINE  (top strip)                                     -->
+        <!-- ============================================================ -->
+        <mxCell id="ci_bg" value="" style="rounded=1;whiteSpace=wrap;fillColor=#f5f5f5;strokeColor=#666666;arcSize=4;" vertex="1" parent="1">
+          <mxGeometry x="30" y="60" width="1240" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="ci_lbl" value="GitHub Actions — netdevsim-ci.yml" style="text;fontSize=13;fontStyle=1;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="45" y="65" width="300" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="ci_trigger" value="PR / Dispatch&#xa;Trigger" style="shape=hexagon;perimeter=hexagonPerimeter2;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="50" y="95" width="120" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="ci_dkms" value="dkms-test&#xa;DKMS modules" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="220" y="95" width="130" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="ci_images" value="ptp-images&#xa;Build containers" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="400" y="95" width="130" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="ci_matrix" value="ptp-test  (8x matrix)&#xa;oc bc dualnicbc tgm ..." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="590" y="93" width="220" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="ci_artifacts" value="Artifacts&#xa;JUnit + logs" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=10;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="870" y="93" width="110" height="58" as="geometry" />
+        </mxCell>
+        <mxCell id="ci_e1" style="strokeColor=#666666;strokeWidth=2;" edge="1" parent="1" source="ci_trigger" target="ci_dkms">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ci_e2" style="strokeColor=#666666;strokeWidth=2;" edge="1" parent="1" source="ci_dkms" target="ci_images">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ci_e3" style="strokeColor=#666666;strokeWidth=2;" edge="1" parent="1" source="ci_images" target="ci_matrix">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ci_e4" style="strokeColor=#666666;strokeWidth=2;" edge="1" parent="1" source="ci_matrix" target="ci_artifacts">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ============================================================ -->
+        <!-- USER SPACE  (middle band)                                    -->
+        <!-- ============================================================ -->
+        <mxCell id="user_bg" value="" style="rounded=1;whiteSpace=wrap;fillColor=#e8f5e9;strokeColor=#82b366;arcSize=3;" vertex="1" parent="1">
+          <mxGeometry x="30" y="200" width="1240" height="280" as="geometry" />
+        </mxCell>
+        <mxCell id="user_lbl" value="User Space  (Host + Kind Cluster)" style="text;fontSize=13;fontStyle=1;fontColor=#2E7D32;" vertex="1" parent="1">
+          <mxGeometry x="45" y="205" width="300" height="20" as="geometry" />
+        </mxCell>
+
+        <!-- Host scripts & processes -->
+        <mxCell id="us_gnss_sim" value="gnss-sim&#xa;(Go, host process)&#xa;NMEA gen + DPLL state machine&#xa;HTTP :9200" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#2E7D32;fontSize=10;align=center;" vertex="1" parent="1">
+          <mxGeometry x="45" y="235" width="175" height="68" as="geometry" />
+        </mxCell>
+        <mxCell id="us_configswitch" value="configSwitch2.sh&#xa;(+ configpair.sh)&#xa;device creation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#2E7D32;fontSize=10;align=center;" vertex="1" parent="1">
+          <mxGeometry x="240" y="235" width="145" height="68" as="geometry" />
+        </mxCell>
+        <mxCell id="us_switch" value="switch1&#xa;OVS L2 bridge" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="405" y="240" width="120" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Kind cluster separator line -->
+        <mxCell id="kind_line" value="" style="endArrow=none;strokeColor=#7986cb;strokeWidth=1;dashed=1;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="45" y="325" as="sourcePoint" />
+            <mxPoint x="1255" y="325" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="kind_lbl" value="Kind Cluster  —  mounts /sys + /dev from host" style="text;fontSize=10;fontStyle=5;fontColor=#3F51B5;" vertex="1" parent="1">
+          <mxGeometry x="45" y="328" width="350" height="16" as="geometry" />
+        </mxCell>
+
+        <!-- linuxptp-daemon sub-processes -->
+        <mxCell id="daemon_lbl" value="linuxptp-daemon DaemonSet pod" style="text;fontSize=9;fontStyle=2;fontColor=#388E3C;" vertex="1" parent="1">
+          <mxGeometry x="45" y="346" width="200" height="14" as="geometry" />
+        </mxCell>
+        <mxCell id="k_ts2phc" value="ts2phc&#xa;(GNSS → PHC)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C8E6C9;strokeColor=#388E3C;fontSize=10;align=center;" vertex="1" parent="1">
+          <mxGeometry x="45" y="365" width="105" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="k_ptp4l" value="ptp4l&#xa;(PTP master/slave)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C8E6C9;strokeColor=#388E3C;fontSize=10;align=center;" vertex="1" parent="1">
+          <mxGeometry x="165" y="365" width="120" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="k_phc2sys" value="phc2sys&#xa;(PHC → sys clock)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C8E6C9;strokeColor=#388E3C;fontSize=10;align=center;" vertex="1" parent="1">
+          <mxGeometry x="300" y="365" width="115" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="k_e810" value="e810 DPLL plugin&#xa;(genl dpll queries)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C8E6C9;strokeColor=#388E3C;fontSize=10;align=center;" vertex="1" parent="1">
+          <mxGeometry x="430" y="365" width="130" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="k_operator" value="ptp-operator" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="580" y="365" width="90" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="k_events" value="cloud-event-proxy&#xa;PTP events" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="690" y="365" width="120" height="42" as="geometry" />
+        </mxCell>
+
+        <!-- Ginkgo -->
+        <mxCell id="k_ginkgo" value="Ginkgo e2e  (run-tests.sh)&#xa;PTP_TEST_MODE=oc|bc|tgm|..." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;align=center;" vertex="1" parent="1">
+          <mxGeometry x="45" y="425" width="230" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- Intra-user arrows -->
+        <mxCell id="ginkgo_to_gnss" value="HTTP /api/signal" style="fontSize=8;fontColor=#b85450;strokeColor=#b85450;dashed=1;" edge="1" parent="1" source="k_ginkgo" target="us_gnss_sim">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ginkgo_to_op" value="k8s API" style="fontSize=8;fontColor=#b85450;strokeColor=#b85450;exitX=1;exitY=0.5;exitDx=0;exitDy=0;" edge="1" parent="1" source="k_ginkgo" target="k_operator">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e810_to_events" value="emits events" style="fontSize=8;fontColor=#d6b656;strokeColor=#d6b656;" edge="1" parent="1" source="k_e810" target="k_events">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ============================================================ -->
+        <!-- KERNEL SPACE  (bottom band)                                  -->
+        <!-- ============================================================ -->
+        <mxCell id="kernel_bg" value="" style="rounded=1;whiteSpace=wrap;fillColor=#FFF9E6;strokeColor=#d6b656;arcSize=3;" vertex="1" parent="1">
+          <mxGeometry x="30" y="510" width="1240" height="310" as="geometry" />
+        </mxCell>
+        <mxCell id="kernel_lbl" value="Kernel Space  (netdevsim-dkms)" style="text;fontSize=13;fontStyle=1;fontColor=#7F6000;" vertex="1" parent="1">
+          <mxGeometry x="45" y="515" width="300" height="20" as="geometry" />
+        </mxCell>
+
+        <!-- DKMS module boxes -->
+        <mxCell id="mod_netdevsim" value="netdevsim.ko&#xa;core driver: fake PCI,&#xa;probe(), NIC + DPLL +&#xa;GNSS + PHC creation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=9;align=center;" vertex="1" parent="1">
+          <mxGeometry x="45" y="545" width="155" height="62" as="geometry" />
+        </mxCell>
+        <mxCell id="mod_dpll" value="nsim_dpll.ko&#xa;DPLL subsystem +&#xa;genl &quot;dpll&quot; family" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="215" y="545" width="130" height="62" as="geometry" />
+        </mxCell>
+        <mxCell id="mod_ptp" value="nsim_ptp.ko&#xa;PTP clock class&#xa;+ mock PHC ops" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="360" y="545" width="120" height="62" as="geometry" />
+        </mxCell>
+        <mxCell id="mod_gnss" value="gnss.ko&#xa;(upstream)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="495" y="550" width="85" height="42" as="geometry" />
+        </mxCell>
+
+        <!-- Separator line -->
+        <mxCell id="hw_line" value="" style="endArrow=none;strokeColor=#d6b656;strokeWidth=1;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="45" y="625" as="sourcePoint" />
+            <mxPoint x="1255" y="625" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="hw_lbl" value="Emulated Virtual Devices  (per netdevsim instance, wpc=1)" style="text;fontSize=11;fontStyle=5;fontColor=#2D5F8A;" vertex="1" parent="1">
+          <mxGeometry x="45" y="630" width="400" height="18" as="geometry" />
+        </mxCell>
+
+        <!-- Virtual devices — columns aligned with user-space callers -->
+        <mxCell id="hw_gnss_dev" value="/dev/gnss0&#xa;NMEA char dev&#xa;(read/write FIFO)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="45" y="660" width="130" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="hw_phc" value="/dev/ptp0&#xa;Mock PHC clock&#xa;(ioctl: gettime/settime/adjtime)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="190" y="660" width="195" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="hw_nics" value="ens1f0 / ens1f1&#xa;Virtual NICs&#xa;(SO_TIMESTAMPING, ethtool)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="400" y="660" width="175" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="hw_dpll_pps" value="PPS DPLL (idx=0)&#xa;lock_status: dynamic" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="590" y="660" width="145" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="hw_dpll_eec" value="EEC DPLL (idx=1)&#xa;lock_status: dynamic" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="750" y="660" width="145" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Pins + sysfs interfaces (reference, not arrow targets) -->
+        <mxCell id="hw_pins" value="GNSS-1PPS pin  |  SyncE pins  |  SMA/U.FL pins" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="590" y="725" width="240" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="iface_sysfs_bus" value="/sys/bus/netdevsim/new_device" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="920" y="660" width="180" height="28" as="geometry" />
+        </mxCell>
+        <mxCell id="iface_sysfs_dpll" value="/sys/bus/pci/devices/&lt;PCI&gt;/dpll/lock_status" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="920" y="700" width="225" height="28" as="geometry" />
+        </mxCell>
+
+        <!-- Internal kernel: sysfs dpll/lock_status drives DPLL PPS -->
+        <mxCell id="k_sysfs_dpll" value="drives" style="strokeColor=#9673a6;strokeWidth=1;dashed=1;dashPattern=4 2;fontSize=8;fontColor=#9673a6;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="iface_sysfs_dpll" target="hw_dpll_pps">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="900" y="714" />
+              <mxPoint x="900" y="685" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <!-- Internal kernel: new_device triggers probe -->
+        <mxCell id="k_bus_devs" value="probe() creates all devices" style="strokeColor=#9673a6;strokeWidth=1;dashed=1;dashPattern=4 2;fontSize=8;fontColor=#9673a6;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="iface_sysfs_bus" target="hw_nics">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="900" y="674" />
+              <mxPoint x="900" y="650" />
+              <mxPoint x="575" y="650" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- ============================================================ -->
+        <!-- CROSS-BOUNDARY ARROWS  (user space -> kernel devices)        -->
+        <!-- Every user process -> every kernel device it touches         -->
+        <!-- Solid = write path, Dashed = read path                       -->
+        <!-- Color = interface type                                       -->
+        <!-- ============================================================ -->
+
+        <!-- A1: gnss-sim write() -> /dev/gnss0 -->
+        <mxCell id="a1" value="gnss-sim: write() NMEA" style="strokeColor=#2E7D32;strokeWidth=2;fontSize=9;fontColor=#2E7D32;exitX=0.3;exitY=1;exitDx=0;exitDy=0;entryX=0.4;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="us_gnss_sim" target="hw_gnss_dev">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="98" y="500" />
+              <mxPoint x="97" y="500" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- A2: gnss-sim write() -> dpll/lock_status -> PPS DPLL -->
+        <mxCell id="a2" value="gnss-sim: write()&#xa;dpll/lock_status" style="strokeColor=#7B1FA2;strokeWidth=2;fontSize=9;fontColor=#7B1FA2;exitX=0.8;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="us_gnss_sim" target="hw_dpll_pps">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="185" y="497" />
+              <mxPoint x="663" y="497" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- A3: configSwitch2 echo > new_device -->
+        <mxCell id="a3" value="configSwitch2: echo &gt; new_device" style="strokeColor=#E65100;strokeWidth=2;fontSize=9;fontColor=#E65100;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="us_configswitch" target="iface_sysfs_bus">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="313" y="503" />
+              <mxPoint x="1010" y="503" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- A4: switch1 <-> ens1f0/ens1f1 veth -->
+        <mxCell id="a4" value="veth pairs" style="strokeColor=#666666;strokeWidth=1;fontSize=9;fontColor=#666666;dashed=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="us_switch" target="hw_nics">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="465" y="506" />
+              <mxPoint x="488" y="506" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- A5: ts2phc read() -> /dev/gnss0 -->
+        <mxCell id="a5" value="ts2phc: read() NMEA" style="strokeColor=#2E7D32;strokeWidth=2;dashed=1;fontSize=9;fontColor=#2E7D32;exitX=0.3;exitY=1;exitDx=0;exitDy=0;entryX=0.2;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="k_ts2phc" target="hw_gnss_dev">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="77" y="490" />
+              <mxPoint x="71" y="490" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- A6: ts2phc ioctl() -> /dev/ptp0 -->
+        <mxCell id="a6" value="ts2phc: ioctl()&#xa;discipline PHC" style="strokeColor=#C62828;strokeWidth=2;fontSize=9;fontColor=#C62828;exitX=0.7;exitY=1;exitDx=0;exitDy=0;entryX=0.15;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="k_ts2phc" target="hw_phc">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="119" y="485" />
+              <mxPoint x="219" y="485" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- A7: ptp4l ioctl() -> /dev/ptp0 (HW timestamps) -->
+        <mxCell id="a7" value="ptp4l: ioctl()&#xa;HW timestamps" style="strokeColor=#C62828;strokeWidth=2;dashed=1;fontSize=9;fontColor=#C62828;exitX=0.3;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="k_ptp4l" target="hw_phc">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="201" y="488" />
+              <mxPoint x="288" y="488" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- A8: ptp4l sendto()/recvfrom() -> ens1f0/ens1f1 -->
+        <mxCell id="a8" value="ptp4l: sendto()/recvfrom()&#xa;PTP L2 packets" style="strokeColor=#AD1457;strokeWidth=2;fontSize=9;fontColor=#AD1457;exitX=0.7;exitY=1;exitDx=0;exitDy=0;entryX=0.3;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="k_ptp4l" target="hw_nics">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="249" y="494" />
+              <mxPoint x="453" y="494" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- A9: phc2sys ioctl() -> /dev/ptp0 -->
+        <mxCell id="a9" value="phc2sys: ioctl()&#xa;read PHC, sync sysclk" style="strokeColor=#C62828;strokeWidth=2;dashed=1;dashPattern=8 4;fontSize=9;fontColor=#C62828;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.85;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="k_phc2sys" target="hw_phc">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="358" y="491" />
+              <mxPoint x="356" y="491" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- A10: e810 plugin genl sendmsg() -> DPLL EEC -->
+        <mxCell id="a10" value="e810: genl sendmsg()&#xa;DPLL_CMD_DEVICE_GET / PIN_GET" style="strokeColor=#1565C0;strokeWidth=2;fontSize=9;fontColor=#1565C0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="k_e810" target="hw_dpll_eec">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="495" y="500" />
+              <mxPoint x="823" y="500" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- ============================================================ -->
+        <!-- FLOW SUMMARY                                                 -->
+        <!-- ============================================================ -->
+        <mxCell id="flow_bg" value="" style="rounded=1;whiteSpace=wrap;fillColor=#f5f5f5;strokeColor=#999999;arcSize=4;" vertex="1" parent="1">
+          <mxGeometry x="30" y="845" width="1240" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="flow_lbl" value="Data Flow Summary" style="text;fontSize=11;fontStyle=1;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="45" y="850" width="200" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="flow1" value="1. configSwitch2  echo &gt; /sys/bus/netdevsim/new_device  →  kernel probe() creates NICs + /dev/ptp0 + /dev/gnss0 + DPLL devices" style="text;fontSize=10;fontColor=#333333;align=left;" vertex="1" parent="1">
+          <mxGeometry x="50" y="872" width="700" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="flow2" value="2. gnss-sim  write() → /dev/gnss0 (NMEA)  +  write() → .../dpll/lock_status (locked|holdover|freerun)  →  kernel DPLL state updates" style="text;fontSize=10;fontColor=#333333;align=left;" vertex="1" parent="1">
+          <mxGeometry x="50" y="892" width="800" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="flow3" value="3. ts2phc  read() /dev/gnss0 (NMEA 1PPS)  +  ioctl() /dev/ptp0 (discipline PHC from GNSS)" style="text;fontSize=10;fontColor=#333333;align=left;" vertex="1" parent="1">
+          <mxGeometry x="50" y="912" width="640" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="flow4" value="4. ptp4l  sendto()/recvfrom() ens1f0/ens1f1 (PTP L2)  +  ioctl() /dev/ptp0 (HW timestamps)" style="text;fontSize=10;fontColor=#333333;align=left;" vertex="1" parent="1">
+          <mxGeometry x="50" y="932" width="640" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="flow5" value="5. e810  genl sendmsg() → DPLL_CMD_DEVICE_GET → reads lock_status → cloud-event-proxy emits PTP event" style="text;fontSize=10;fontColor=#333333;align=left;" vertex="1" parent="1">
+          <mxGeometry x="50" y="952" width="700" height="16" as="geometry" />
+        </mxCell>
+
+        <!-- ============================================================ -->
+        <!-- LEGEND                                                       -->
+        <!-- ============================================================ -->
+        <mxCell id="legend_bg" value="" style="rounded=1;whiteSpace=wrap;fillColor=#f5f5f5;strokeColor=#999999;arcSize=6;" vertex="1" parent="1">
+          <mxGeometry x="30" y="990" width="1100" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_lbl" value="Legend" style="text;fontSize=10;fontStyle=1;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="45" y="993" width="50" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="leg1" value="DKMS module" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="45" y="1015" width="90" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="leg2" value="DPLL device" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="145" y="1015" width="80" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="leg3" value="Host process" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#2E7D32;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="235" y="1015" width="85" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="leg3b" value="linuxptp sub-process" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C8E6C9;strokeColor=#388E3C;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="330" y="1015" width="120" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="leg4" value="Char / net device" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="460" y="1015" width="100" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="leg5" value="Sysfs interface" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="570" y="1015" width="90" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="leg_arrows" value="——  write()      – –  read()/ioctl()      –·–  internal kernel      Color = interface type" style="text;fontSize=9;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="680" y="1018" width="430" height="20" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
