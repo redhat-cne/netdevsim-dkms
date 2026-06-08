@@ -319,10 +319,30 @@ static int ubx_build_nav_status(u8 *buf, size_t bufsz, u8 gps_fix)
 			       payload, UBX_NAV_STATUS_LEN);
 }
 
-static int ubx_build_nav_clock(u8 *buf, size_t bufsz, u8 gps_fix)
+static int ubx_build_nav_clock(u8 *buf, size_t bufsz,
+			       u8 gps_fix,
+			       enum dpll_lock_status lock_status)
 {
 	u8 payload[UBX_NAV_CLOCK_LEN] = {};
-	u32 t_acc = (gps_fix >= 2) ? 10 : 999999;
+	u32 t_acc;
+
+	/*
+	 * tAcc models time accuracy of the oscillator:
+	 *   LOCKED (fix present):  10 ns  — fully synchronized
+	 *   HOLDOVER (fix lost):   10 ns  — oscillator still in-spec
+	 *   UNLOCKED/FREERUN:      999999 ns — out of spec
+	 *
+	 * On real hardware the oscillator drifts gradually during
+	 * holdover; keeping tAcc low here lets the daemon's
+	 * isOffsetInRange() stay happy so the GM remains in HOLDOVER
+	 * (CC7) until the DPLL itself transitions to UNLOCKED.
+	 */
+	if (gps_fix >= 2)
+		t_acc = 10;
+	else if (lock_status == DPLL_LOCK_STATUS_HOLDOVER)
+		t_acc = 10;
+	else
+		t_acc = 999999;
 
 	ubx_put_le32(payload, ubx_get_itow());
 	ubx_put_le32(payload + 4, 0);		/* clkB: clock bias (ns) */
@@ -383,7 +403,8 @@ static enum hrtimer_restart nsim_ubx_timer_cb(struct hrtimer *timer)
 	if (len > 0)
 		gnss_insert_raw(ndpll->gnss_dev, buf, len);
 
-	len = ubx_build_nav_clock(buf, sizeof(buf), ndpll->gnss_gps_fix);
+	len = ubx_build_nav_clock(buf, sizeof(buf), ndpll->gnss_gps_fix,
+				  ndpll->lock_status);
 	if (len > 0)
 		gnss_insert_raw(ndpll->gnss_dev, buf, len);
 
