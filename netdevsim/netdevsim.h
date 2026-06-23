@@ -130,6 +130,7 @@ struct netdevsim {
 	struct nsim_dev *nsim_dev;
 	struct nsim_dev_port *nsim_dev_port;
 	struct mock_phc *phc;
+	struct kobject *ptp_compat_kobj; /* /sys/.../pci_dev/ptp/ for compat */
 	int logical_clk_id;  /* Logical clock ID for PHC sharing (-1 = unique) */
 
 	u64 tx_packets;
