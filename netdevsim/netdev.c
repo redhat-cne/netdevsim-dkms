@@ -540,7 +540,27 @@ static int nsim_init_netdevsim(struct netdevsim *ns)
 	err = register_netdevice(ns->netdev);
 	if (err)
 		goto err_ipsec_teardown;
+	netif_carrier_on(ns->netdev);
 	rtnl_unlock();
+
+	/*
+	 * Create /sys/devices/.../pci_dev/ptp/ptpN symlink so tools that
+	 * walk /sys/class/net/<iface>/device/ptp/ find our PTP clock.
+	 */
+	if (ns->nsim_dev->fake_pci_dev) {
+		struct kobject *pci_kobj = &ns->nsim_dev->fake_pci_dev->dev.kobj;
+		struct kobject *ptp_dir = kobject_create_and_add("ptp", pci_kobj);
+		if (ptp_dir) {
+			char link_name[16];
+			snprintf(link_name, sizeof(link_name), "ptp%d",
+				 mock_phc_index(phc));
+			(void)sysfs_create_link(ptp_dir,
+					       mock_phc_dev_kobj(phc),
+					       link_name);
+			ns->ptp_compat_kobj = ptp_dir;
+		}
+	}
+
 	return 0;
 
 err_ipsec_teardown:
@@ -563,12 +583,18 @@ static int nsim_init_netdevsim_vf(struct netdevsim *ns)
 	ns->netdev->netdev_ops = &nsim_vf_netdev_ops;
 	rtnl_lock();
 	err = register_netdevice(ns->netdev);
+	if (!err)
+		netif_carrier_on(ns->netdev);
 	rtnl_unlock();
 	return err;
 }
 
 static void nsim_exit_netdevsim(struct netdevsim *ns)
 {
+	if (ns->ptp_compat_kobj) {
+		kobject_put(ns->ptp_compat_kobj);
+		ns->ptp_compat_kobj = NULL;
+	}
 	nsim_udp_tunnels_info_destroy(ns->netdev);
 	mock_phc_release(ns->phc);
 }

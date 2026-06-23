@@ -20,6 +20,8 @@
 #include <linux/string.h>
 #include <linux/ktime.h>
 
+#include "ptp_private.h"
+
 #define MOCK_PHC_MAX_ADJ_PPB	500000000
 
 #define info_to_phc(d) container_of((d), struct mock_phc, info)
@@ -215,6 +217,12 @@ int mock_phc_logical_clk_id(struct mock_phc *phc)
 }
 EXPORT_SYMBOL_GPL(mock_phc_logical_clk_id);
 
+struct kobject *mock_phc_dev_kobj(struct mock_phc *phc)
+{
+	return &phc->clock->dev.kobj;
+}
+EXPORT_SYMBOL_GPL(mock_phc_dev_kobj);
+
 struct mock_phc *mock_phc_create(struct device *dev, int logical_clk_id)
 {
 	struct mock_phc *phc;
@@ -226,15 +234,30 @@ struct mock_phc *mock_phc_create(struct device *dev, int logical_clk_id)
 		goto out;
 	}
 
-	strscpy(phc->pins[0].name, "NONE", sizeof(phc->pins[0].name));
+	strscpy(phc->pins[0].name, "GNSS-1PPS", sizeof(phc->pins[0].name));
 	phc->pins[0].index = 0;
-	phc->pins[0].func = PTP_PF_NONE;
+	phc->pins[0].func = PTP_PF_EXTTS;
 	phc->pins[0].chan = 0;
 
-	strscpy(phc->pins[1].name, "GNSS1PPS", sizeof(phc->pins[1].name));
+	strscpy(phc->pins[1].name, "SMA1", sizeof(phc->pins[1].name));
 	phc->pins[1].index = 1;
 	phc->pins[1].func = PTP_PF_NONE;
 	phc->pins[1].chan = 0;
+
+	strscpy(phc->pins[2].name, "SMA2", sizeof(phc->pins[2].name));
+	phc->pins[2].index = 2;
+	phc->pins[2].func = PTP_PF_NONE;
+	phc->pins[2].chan = 0;
+
+	strscpy(phc->pins[3].name, "U.FL1", sizeof(phc->pins[3].name));
+	phc->pins[3].index = 3;
+	phc->pins[3].func = PTP_PF_NONE;
+	phc->pins[3].chan = 0;
+
+	strscpy(phc->pins[4].name, "U.FL2", sizeof(phc->pins[4].name));
+	phc->pins[4].index = 4;
+	phc->pins[4].func = PTP_PF_NONE;
+	phc->pins[4].chan = 0;
 
 	phc->info = (struct ptp_clock_info) {
 		.owner		= THIS_MODULE,

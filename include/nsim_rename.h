@@ -51,6 +51,7 @@
 #define mock_phc_index			nsim_mock_phc_index
 #define mock_phc_logical_clk_id		nsim_mock_phc_logical_clk_id
 #define mock_phc_get_ptp_info		nsim_mock_phc_get_ptp_info
+#define mock_phc_dev_kobj		nsim_mock_phc_dev_kobj
 
 /* ---- DPLL core (dpll_core.c) ------------------------------------------- */
 #define dpll_device_get			nsim_dpll_device_get
