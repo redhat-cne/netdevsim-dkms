@@ -92,6 +92,18 @@ out_drop_cnt:
 	return NETDEV_TX_OK;
 }
 
+static int nsim_open(struct net_device *dev)
+{
+	netif_carrier_on(dev);
+	return 0;
+}
+
+static int nsim_stop(struct net_device *dev)
+{
+	netif_carrier_off(dev);
+	return 0;
+}
+
 static void nsim_set_rx_mode(struct net_device *dev)
 {
 
@@ -401,6 +413,8 @@ static int nsim_set_ts_config(struct net_device *netdev,
 	return 0;
 }
 static const struct net_device_ops nsim_netdev_ops = {
+	.ndo_open = nsim_open,
+	.ndo_stop = nsim_stop,
 	.ndo_start_xmit = nsim_start_xmit,
 	.ndo_set_rx_mode = nsim_set_rx_mode,
 	.ndo_set_mac_address = eth_mac_addr,
@@ -424,6 +438,8 @@ static const struct net_device_ops nsim_netdev_ops = {
 };
 
 static const struct net_device_ops nsim_vf_netdev_ops = {
+	.ndo_open = nsim_open,
+	.ndo_stop = nsim_stop,
 	.ndo_start_xmit = nsim_start_xmit,
 	.ndo_set_rx_mode = nsim_set_rx_mode,
 	.ndo_set_mac_address = eth_mac_addr,
