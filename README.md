@@ -143,6 +143,16 @@ sudo usermod -aG libvirt,kvm $USER
 # Log out and back in for group membership to take effect
 ```
 
+4. VM disks are stored in `~/.local/share/netdevsim-dkms/`. QEMU needs
+   search permission (`+x`) on each parent directory. The script grants
+   this automatically via ACL, but if you hit permission errors, run:
+
+```bash
+# Find the QEMU user on your system (libvirt-qemu on Debian/Ubuntu, qemu on RHEL/Fedora)
+QEMU_USER=$(id -nu libvirt-qemu 2>/dev/null || id -nu qemu 2>/dev/null)
+setfacl -m "u:${QEMU_USER}:x" ~  ~/.local  ~/.local/share
+```
+
 ### Quick Setup (no tests)
 
 `scripts/setup-libvirt-ubuntu.sh` creates a libvirt VM with the DKMS modules

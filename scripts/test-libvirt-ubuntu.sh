@@ -45,6 +45,7 @@ DKMS_SRC="$(cd "$(dirname "$0")/.." && pwd)"
 DKMS_PKG="netdevsim"
 DKMS_VER="6.9.5"
 
+VM_DATA_DIR="${HOME}/.local/share/netdevsim-dkms"
 TMPDIR_BASE="/tmp/netdevsim-dkms-libvirt-ubuntu"
 SSH_USER="ubuntu"
 IMAGE_CACHE="${HOME}/.cache/netdevsim-dkms"
@@ -108,6 +109,7 @@ cleanup_on_exit() {
         virsh destroy "$VM_NAME" 2>/dev/null || true
         sleep 2
         virsh undefine "$VM_NAME" --remove-all-storage 2>/dev/null || true
+        rm -rf "${VM_DATA_DIR:?}/${VM_NAME}"
     fi
     rm -rf "$TMPDIR_BASE"
     if [[ $rc -eq 0 ]]; then
@@ -167,10 +169,8 @@ if [[ $(id -u) -ne 0 ]]; then
         || die "Current user is not in the 'libvirt' group. Fix with: sudo usermod -aG libvirt \$USER  (then log out/in)"
 fi
 
-if ! systemctl is-active --quiet libvirtd 2>/dev/null; then
-    log "  libvirtd is not running — starting with sudo ..."
-    sudo systemctl start libvirtd
-fi
+systemctl is-active --quiet libvirtd 2>/dev/null \
+    || die "libvirtd is not running. Start it with: sudo systemctl start libvirtd"
 
 virsh net-info "$LIBVIRT_NET" >/dev/null 2>&1 || die "Libvirt network '$LIBVIRT_NET' not found. Create it or specify --network."
 virsh net-list --name 2>/dev/null | grep -qw "$LIBVIRT_NET" || {
@@ -179,7 +179,26 @@ virsh net-list --name 2>/dev/null | grep -qw "$LIBVIRT_NET" || {
 }
 
 [[ -e /dev/kvm ]] || die "/dev/kvm not available. Ensure KVM is enabled (modprobe kvm_intel or kvm_amd)."
-[[ -r /dev/kvm && -w /dev/kvm ]] || die "/dev/kvm not accessible. Add user to 'kvm' group: sudo usermod -aG kvm \$USER"
+[[ -r /dev/kvm && -w /dev/kvm ]] || die "/dev/kvm not accessible. Add user to 'kvm' group: sudo usermod -aG kvm \$USER  (then log out/in)"
+
+# QEMU runs as a separate user and needs +x on every parent directory
+# leading to the disk image.  Check and tell the user what to run.
+QEMU_USER=""
+for u in libvirt-qemu qemu; do
+    id "$u" &>/dev/null && QEMU_USER="$u" && break
+done
+if [[ -n "$QEMU_USER" ]]; then
+    NEED_ACL=()
+    for d in "$HOME" "$HOME/.local" "$HOME/.local/share"; do
+        [[ -d "$d" ]] || continue
+        getfacl -p "$d" 2>/dev/null | grep -q "user:${QEMU_USER}:.*x" && continue
+        NEED_ACL+=("$d")
+    done
+    if (( ${#NEED_ACL[@]} > 0 )); then
+        die "QEMU user '${QEMU_USER}' lacks search (+x) permission on: ${NEED_ACL[*]}
+  Fix with:  setfacl -m u:${QEMU_USER}:x ${NEED_ACL[*]}"
+    fi
+fi
 
 log "  DKMS source: $DKMS_SRC"
 log "  Ubuntu:      $UBUNTU_RELEASE (amd64)"
@@ -220,10 +239,12 @@ fi
 # ---------------------------------------------------------------------------
 log "Preparing disk image (resize to $VM_DISK_SIZE) ..."
 
-mkdir -p "$TMPDIR_BASE"
-WORK_QCOW2="$TMPDIR_BASE/${VM_NAME}.qcow2"
+VM_DIR="${VM_DATA_DIR}/${VM_NAME}"
+mkdir -p "$VM_DIR" "$TMPDIR_BASE"
+WORK_QCOW2="${VM_DIR}/${VM_NAME}.qcow2"
 qemu-img convert -f qcow2 -O qcow2 "$CACHED_IMG" "$WORK_QCOW2"
 qemu-img resize "$WORK_QCOW2" "$VM_DISK_SIZE"
+log "  Disk: $WORK_QCOW2"
 
 # ---------------------------------------------------------------------------
 # 4. Create cloud-init NoCloud ISO
@@ -231,7 +252,7 @@ qemu-img resize "$WORK_QCOW2" "$VM_DISK_SIZE"
 log "Creating cloud-init NoCloud ISO ..."
 
 CIDATA_DIR="$TMPDIR_BASE/cidata"
-CIDATA_ISO="$TMPDIR_BASE/cidata.iso"
+CIDATA_ISO="${VM_DIR}/cidata.iso"
 mkdir -p "$CIDATA_DIR"
 
 cat > "$CIDATA_DIR/meta-data" <<EOF
