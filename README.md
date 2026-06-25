@@ -136,6 +136,13 @@ When using netdevsim inside containers or Kubernetes pods:
 sudo apt-get install -y qemu-kvm libvirt-daemon-system virtinst cloud-image-utils
 ```
 
+3. Add your user to the `libvirt` and `kvm` groups (no root needed after this):
+
+```bash
+sudo usermod -aG libvirt,kvm $USER
+# Log out and back in for group membership to take effect
+```
+
 ### Quick Setup (no tests)
 
 `scripts/setup-libvirt-ubuntu.sh` creates a libvirt VM with the DKMS modules

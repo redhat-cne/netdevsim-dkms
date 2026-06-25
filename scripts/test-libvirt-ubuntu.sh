@@ -49,6 +49,8 @@ TMPDIR_BASE="/tmp/netdevsim-dkms-libvirt-ubuntu"
 SSH_USER="ubuntu"
 IMAGE_CACHE="${HOME}/.cache/netdevsim-dkms"
 
+export LIBVIRT_DEFAULT_URI="${LIBVIRT_DEFAULT_URI:-qemu:///system}"
+
 # ---------------------------------------------------------------------------
 # Image URLs (amd64) — resolved after argument parsing
 # ---------------------------------------------------------------------------
@@ -160,10 +162,15 @@ elif command -v mkisofs >/dev/null 2>&1; then
 fi
 [[ -n "$MKISO_CMD" ]] || die "genisoimage/mkisofs not found. Install with: dnf install genisoimage"
 
-systemctl is-active --quiet libvirtd 2>/dev/null || {
-    log "  Starting libvirtd ..."
-    systemctl start libvirtd
-}
+if [[ $(id -u) -ne 0 ]]; then
+    id -nG | grep -qw libvirt 2>/dev/null \
+        || die "Current user is not in the 'libvirt' group. Fix with: sudo usermod -aG libvirt \$USER  (then log out/in)"
+fi
+
+if ! systemctl is-active --quiet libvirtd 2>/dev/null; then
+    log "  libvirtd is not running — starting with sudo ..."
+    sudo systemctl start libvirtd
+fi
 
 virsh net-info "$LIBVIRT_NET" >/dev/null 2>&1 || die "Libvirt network '$LIBVIRT_NET' not found. Create it or specify --network."
 virsh net-list --name 2>/dev/null | grep -qw "$LIBVIRT_NET" || {
@@ -172,6 +179,7 @@ virsh net-list --name 2>/dev/null | grep -qw "$LIBVIRT_NET" || {
 }
 
 [[ -e /dev/kvm ]] || die "/dev/kvm not available. Ensure KVM is enabled (modprobe kvm_intel or kvm_amd)."
+[[ -r /dev/kvm && -w /dev/kvm ]] || die "/dev/kvm not accessible. Add user to 'kvm' group: sudo usermod -aG kvm \$USER"
 
 log "  DKMS source: $DKMS_SRC"
 log "  Ubuntu:      $UBUNTU_RELEASE (amd64)"
