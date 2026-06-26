@@ -125,6 +125,77 @@ When using netdevsim inside containers or Kubernetes pods:
 - **Kubernetes pods:** The udev rule creates real `/dev/ptpN` device
   nodes (not symlinks) so they propagate into containers.
 
+## Local libvirt/KVM VMs (Linux x86_64)
+
+### Prerequisites
+
+1. A Linux x86_64 host with KVM support.
+2. Install libvirt, QEMU, and cloud-image-utils:
+
+```bash
+sudo apt-get install -y qemu-kvm libvirt-daemon-system virtinst cloud-image-utils
+```
+
+3. Add your user to the `libvirt` and `kvm` groups (no root needed after this):
+
+```bash
+sudo usermod -aG libvirt,kvm $USER
+# Log out and back in for group membership to take effect
+```
+
+4. VM disks are stored in `~/.local/share/netdevsim-dkms/`. QEMU needs
+   search permission (`+x`) on each parent directory. The script grants
+   this automatically via ACL, but if you hit permission errors, run:
+
+```bash
+# Find the QEMU user on your system (libvirt-qemu on Debian/Ubuntu, qemu on RHEL/Fedora)
+QEMU_USER=$(id -nu libvirt-qemu 2>/dev/null || id -nu qemu 2>/dev/null)
+setfacl -m "u:${QEMU_USER}:x" ~  ~/.local  ~/.local/share
+```
+
+### Quick Setup (no tests)
+
+`scripts/setup-libvirt-ubuntu.sh` creates a libvirt VM with the DKMS modules
+installed and loaded, adds an SSH config entry, and stops — no tests are run.
+
+```bash
+./scripts/setup-libvirt-ubuntu.sh
+
+# Then connect:
+ssh netdevsim-ubuntu-test
+```
+
+### Running ptp-operator Tests
+
+Once the VM is set up, SSH in and run the ptp-operator test suite. Clone the
+[ptp-operator](https://github.com/k8snetworkplumbingwg/ptp-operator) repo on
+the VM, then run:
+
+```bash
+cd ptp-operator/scripts
+./run-on-vm.sh --dkms --mode oc,bc,dualnicbc,dualnicbcha,dualfollower <VM_IP> | tee logs.txt
+```
+
+This builds and deploys the ptp-operator on a Kind cluster inside the VM and
+runs all five test scenarios (ordinary clock, boundary clock, dual-NIC boundary
+clock, dual-NIC boundary clock HA, dual follower). Results are streamed to
+`logs.txt`.
+
+To run a single scenario:
+
+```bash
+./run-on-vm.sh --dkms --mode bc <VM_IP> | tee logs.txt
+```
+
+### Managing the VM
+
+```bash
+virsh list --all                         # list VMs
+virsh domifaddr netdevsim-ubuntu-test    # get VM IP
+virsh shutdown netdevsim-ubuntu-test     # stop VM
+virsh undefine --remove-all-storage netdevsim-ubuntu-test  # delete VM
+```
+
 ## Local UTM VMs (macOS)
 
 ### Prerequisites
