@@ -112,54 +112,47 @@ static int mock_phc_gettime64(struct ptp_clock_info *info,
 	return 0;
 }
 
+/*
+ * Poll the PHC time at a high rate and emit one EXTTS event each time
+ * the PHC second counter increments.  The event timestamp is always
+ * the exact PHC second boundary (sec * 1e9).
+ *
+ * Why polling?  Computing the exact monotonic instant of the next PHC
+ * second requires arithmetic involving freq_ppb that is fragile under
+ * large offsets or frequency swings.  Polling at 100 ms is cheap and
+ * bulletproof: hrtimer_forward_now + HRTIMER_RESTART never stops, and
+ * the last_extts_sec dedup means exactly one event per PHC second.
+ */
+#define EXTTS_POLL_NS	(NSEC_PER_SEC / 10)	/* 100 ms */
+
 static enum hrtimer_restart mock_phc_extts_timer(struct hrtimer *timer)
 {
 	struct mock_phc *phc = container_of(timer, struct mock_phc, extts_timer);
 	struct ptp_clock_event event;
 	unsigned long flags;
-	u64 ns;
-	s64 freq;
+	u64 phc_ns;
 	u64 sec;
-	u32 frac;
-	s64 delay;
-	s64 divisor;
+
+	if (!READ_ONCE(phc->extts_enabled))
+		goto reschedule;
 
 	spin_lock_irqsave(&phc->lock, flags);
-	ns = mock_phc_read_locked(phc);
-	freq = phc->freq_ppb;
+	phc_ns = mock_phc_read_locked(phc);
 	spin_unlock_irqrestore(&phc->lock, flags);
 
-	/* Snap to the nearest second boundary.  Real 1PPS hardware fires
-	 * exactly at the boundary; the mock timer has jitter so we round. */
-	sec = ns;
-	frac = do_div(sec, NSEC_PER_SEC);
+	sec = div_u64(phc_ns, NSEC_PER_SEC);
 
-	// #region agent log
-	pr_info("d753ad EXTTS: phc_ns=%llu frac_ns=%u offset_ns=%lld freq_ppb=%lld\n",
-		ns, frac, phc->offset_ns, freq);
-	// #endregion
+	if (sec != phc->last_extts_sec) {
+		phc->last_extts_sec = sec;
 
-	if (frac >= NSEC_PER_SEC / 2)
-		ns = (sec + 1) * NSEC_PER_SEC;
-	else
-		ns = sec * NSEC_PER_SEC;
+		event.timestamp = sec * NSEC_PER_SEC;
+		event.type = PTP_CLOCK_EXTTS;
+		event.index = phc->extts_channel;
+		ptp_clock_event(phc->clock, &event);
+	}
 
-	event.type = PTP_CLOCK_EXTTS;
-	event.index = phc->extts_channel;
-	event.timestamp = ns;
-	ptp_clock_event(phc->clock, &event);
-
-	/* Schedule the next event 1 PHC second later.  The PHC advances at
-	 * rate (1 + freq_ppb/1e9) relative to CLOCK_MONOTONIC, so scale:
-	 * mono_delay = 1e9 * 1e9 / (1e9 + freq).  */
-	divisor = 1000000000LL + freq;
-	if (divisor <= 0)
-		divisor = 1;
-	delay = div_s64((s64)NSEC_PER_SEC * 1000000000LL, divisor);
-	if (delay < NSEC_PER_SEC / 4)
-		delay = NSEC_PER_SEC / 4;
-
-	hrtimer_forward_now(timer, ns_to_ktime((u64)delay));
+reschedule:
+	hrtimer_forward_now(timer, ns_to_ktime(EXTTS_POLL_NS));
 	return HRTIMER_RESTART;
 }
 
@@ -176,27 +169,16 @@ static int mock_phc_enable(struct ptp_clock_info *info,
 
 	switch (rq->type) {
 	case PTP_CLK_REQ_EXTTS: {
-		u64 now_ns, ns_to_next;
-
 		if (rq->extts.index >= info->n_ext_ts)
 			return -EINVAL;
 		if (on) {
-			unsigned long flags;
-
 			phc->extts_channel = rq->extts.index;
-			phc->extts_enabled = true;
-
-			spin_lock_irqsave(&phc->lock, flags);
-			now_ns = mock_phc_read_locked(phc);
-			spin_unlock_irqrestore(&phc->lock, flags);
-			ns_to_next = NSEC_PER_SEC -
-				     do_div(now_ns, NSEC_PER_SEC);
-			hrtimer_start(&phc->extts_timer,
-				      ns_to_ktime(ns_to_next),
-				      HRTIMER_MODE_REL);
+			phc->last_extts_sec = 0;
+			/* Barrier ensures channel/sec are visible before flag */
+			smp_wmb();
+			WRITE_ONCE(phc->extts_enabled, true);
 		} else {
-			phc->extts_enabled = false;
-			hrtimer_cancel(&phc->extts_timer);
+			WRITE_ONCE(phc->extts_enabled, false);
 		}
 		return 0;
 	}
@@ -287,6 +269,9 @@ struct mock_phc *mock_phc_create(struct device *dev, int logical_clk_id)
 	phc->freq_ppb = 0;
 
 	phc->clock = ptp_clock_register(&phc->info, dev);
+	if (!IS_ERR(phc->clock))
+		hrtimer_start(&phc->extts_timer, ns_to_ktime(EXTTS_POLL_NS),
+			      HRTIMER_MODE_REL);
 	if (IS_ERR(phc->clock)) {
 		err = PTR_ERR(phc->clock);
 		goto out_free_phc;
