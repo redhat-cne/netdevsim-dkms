@@ -33,6 +33,7 @@ struct mock_phc {
 	struct hrtimer extts_timer;
 	bool extts_enabled;
 	int extts_channel;
+	u64 last_extts_sec;	/* dedup: last PHC second we reported */
 };
 
 #if IS_ENABLED(CONFIG_PTP_1588_CLOCK_MOCK)

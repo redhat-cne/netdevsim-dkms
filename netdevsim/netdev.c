@@ -27,6 +27,7 @@
 #include <net/rtnetlink.h>
 #include <net/udp_tunnel.h>
 #include <linux/skbuff.h>
+#include <net/dst.h>
 #include "netdevsim.h"
 #include <linux/device.h>
 
@@ -66,7 +67,25 @@ static netdev_tx_t nsim_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	if (ptp_info)
 		ptp_info->gettime64(ptp_info, &rx_ts);
 	skb_hwtstamps(skb)->hwtstamp = timespec64_to_ktime(rx_ts);
-	if (unlikely(dev_forward_skb(peer_ns->netdev, skb) == NET_RX_DROP))
+
+	/*
+	 * Inject into peer's RX path without dev_forward_skb which scrubs
+	 * skb_shared_info hwtstamps during cross-netns forwarding (kernel 6.11+).
+	 * We replicate the necessary parts of __dev_forward_skb manually.
+	 */
+	if (skb_orphan_frags(skb, GFP_ATOMIC) ||
+	    unlikely(!is_skb_forwardable(peer_ns->netdev, skb))) {
+		kfree_skb(skb);
+		goto out_drop_cnt;
+	}
+	skb_orphan(skb);
+	skb->pkt_type = PACKET_HOST;
+	skb->protocol = eth_type_trans(skb, peer_ns->netdev);
+	skb->skb_iif = 0;
+	skb_dst_drop(skb);
+	skb->mark = 0;
+	nf_reset_ct(skb);
+	if (unlikely(netif_rx(skb) == NET_RX_DROP))
 		goto out_drop_cnt;
 	/* only timestamp the outbound packet if the user has requested it */
 	if (gen_tx_tstamp) {
