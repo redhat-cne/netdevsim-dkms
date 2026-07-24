@@ -432,6 +432,43 @@ static u8 nsim_gga_quality_to_gps_fix(u8 gga_quality)
  * concatenated NMEA sentences from a single write() call, so we
  * search for '$' start markers rather than only checking buf[0].
  */
+/*
+ * Mirror GGA-derived gpsFix into DPLL lock_status so gnss-sim signal
+ * loss (NMEA fix quality 0) drives the same holdover path as UBX
+ * INFIL_NCNOTHRS:
+ *   locked + gpsFix < 2  → HOLDOVER
+ *   gpsFix >= 2          → LOCKED_HO_ACQ
+ * Do not promote UNLOCKED (sysfs freerun after holdover timeout) back
+ * to HOLDOVER while GGA remains invalid.
+ */
+static void nsim_dpll_apply_gps_fix(struct nsim_dpll *ndpll, u8 gps_fix)
+{
+	enum dpll_lock_status new_status;
+
+	if (gps_fix != ndpll->gnss_gps_fix)
+		ndpll->gnss_gps_fix = gps_fix;
+
+	if (ndpll->signal_blocked)
+		return;
+
+	if (gps_fix < 2) {
+		if (ndpll->lock_status != DPLL_LOCK_STATUS_LOCKED_HO_ACQ)
+			return;
+		new_status = DPLL_LOCK_STATUS_HOLDOVER;
+	} else {
+		new_status = DPLL_LOCK_STATUS_LOCKED_HO_ACQ;
+	}
+
+	if (new_status == ndpll->lock_status)
+		return;
+
+	ndpll->lock_status = new_status;
+	pr_info("netdevsim: GGA gpsFix=%u → DPLL %s\n", gps_fix,
+		(new_status == DPLL_LOCK_STATUS_HOLDOVER) ? "holdover"
+							  : "locked");
+	schedule_work(&ndpll->ntf_work);
+}
+
 static void nsim_parse_gga_fix(struct nsim_dpll *ndpll,
 			       const unsigned char *buf, size_t count)
 {
@@ -457,9 +494,10 @@ static void nsim_parse_gga_fix(struct nsim_dpll *ndpll,
 					if (i + 1 < count &&
 					    buf[i + 1] >= '0' &&
 					    buf[i + 1] <= '9') {
-						ndpll->gnss_gps_fix =
+						nsim_dpll_apply_gps_fix(
+							ndpll,
 							nsim_gga_quality_to_gps_fix(
-								buf[i + 1] - '0');
+								buf[i + 1] - '0'));
 					}
 					return;
 				}
