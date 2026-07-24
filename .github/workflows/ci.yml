@@ -14,8 +14,8 @@ concurrency:
 env:
   DKMS_PKG: netdevsim
   DKMS_VER: "6.9.5"
-  PTP_REPO: https://github.com/k8snetworkplumbingwg/ptp-operator.git
-  PTP_BRANCH: main
+  PTP_REPO: https://github.com/bnshr/ptp-operator.git
+  PTP_BRANCH: integrate-add-gnss
 
 jobs:
   # ------------------------------------------------------------------
