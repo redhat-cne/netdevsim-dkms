@@ -10,6 +10,10 @@
  * applies a frequency correction on top of this base so the PTP servo
  * feedback loop operates normally.
  *
+ * Basing the PHC on CLOCK_TAI looks attractive for GNSS TOD alignment, but on
+ * T-GM/T-BC profiles phc2sys steers REALTIME from the PHC; TAI moves with
+ * REALTIME, so a TAI-based PHC forms a positive feedback loop with ts2phc.
+ *
  * Two PTP pins are exposed so PTP_PIN_SETFUNC2 with pin index 1 (typical for
  * 1PPS input on Intel-style devices) succeeds; both may map EXTTS to channel 0.
  */
@@ -19,6 +23,7 @@
 #include <linux/kernel.h>
 #include <linux/string.h>
 #include <linux/ktime.h>
+#include <linux/timekeeping.h>
 
 #include "ptp_private.h"
 
@@ -35,7 +40,7 @@ EXPORT_SYMBOL_GPL(mock_phc_get_ptp_info);
 /*
  * Advance the internal bookkeeping: accumulate the frequency-induced
  * drift since the last update and snapshot the monotonic time.
- * Returns the PHC time = monotonic + accumulated offset.
+ * Returns the PHC time = CLOCK_MONOTONIC + accumulated offset.
  * Must be called with phc->lock held.
  */
 static u64 mock_phc_read_locked(struct mock_phc *phc)
@@ -113,46 +118,61 @@ static int mock_phc_gettime64(struct ptp_clock_info *info,
 }
 
 /*
- * Poll the PHC time at a high rate and emit one EXTTS event each time
- * the PHC second counter increments.  The event timestamp is always
- * the exact PHC second boundary (sec * 1e9).
+ * Simulate a GNSS 1PPS input: one EXTTS edge per CLOCK_TAI second, with
+ * the event timestamp equal to the PHC reading at that edge.
  *
- * Why polling?  Computing the exact monotonic instant of the next PHC
- * second requires arithmetic involving freq_ppb that is fragile under
- * large offsets or frequency swings.  Polling at 100 ms is cheap and
- * bulletproof: hrtimer_forward_now + HRTIMER_RESTART never stops, and
- * the last_extts_sec dedup means exactly one event per PHC second.
+ * Why TAI (not PHC) second boundaries?
+ *   ts2phc pairs EXTTS with NMEA, which is UTC converted to TAI via the
+ *   leapfile.  Real GNSS 1PPS is aligned to that absolute time, not to
+ *   the PHC's own second counter.  Firing on PHC seconds made EXTTS
+ *   wander with adjfine() and produced a persistent ±1 s pairing flip
+ *   (offset 0 ↔ -1e9), which flapped T-GM clock class 6↔248 and broke
+ *   downstream OC lock.
+ *
+ * Why report the PHC reading corrected back to the TAI edge?
+ *   A polled hrtimer can run up to ~1 ms after the boundary.  Stamping
+ *   the live PHC then injects that latency into every sample (typically
+ *   several µs–ms of jitter), which exceeds ts2phc's lock threshold
+ *   (1500 ns).  Subtracting the observed TAI lateness approximates the
+ *   PHC capture at the true edge (valid while |freq_ppb| is modest).
  */
-#define EXTTS_POLL_NS	(NSEC_PER_SEC / 10)	/* 100 ms */
+#define EXTTS_IDLE_POLL_NS	(NSEC_PER_SEC / 10)	/* 100 ms while disabled */
+#define EXTTS_EDGE_SLACK_NS	(NSEC_PER_MSEC)		/* wake 1 ms after edge */
 
 static enum hrtimer_restart mock_phc_extts_timer(struct hrtimer *timer)
 {
 	struct mock_phc *phc = container_of(timer, struct mock_phc, extts_timer);
 	struct ptp_clock_event event;
 	unsigned long flags;
-	u64 phc_ns;
-	u64 sec;
+	u64 tai_ns, tai_sec, phc_ns, late_ns, next_delta_ns;
 
-	if (!READ_ONCE(phc->extts_enabled))
-		goto reschedule;
+	if (!READ_ONCE(phc->extts_enabled)) {
+		hrtimer_forward_now(timer, ns_to_ktime(EXTTS_IDLE_POLL_NS));
+		return HRTIMER_RESTART;
+	}
 
-	spin_lock_irqsave(&phc->lock, flags);
-	phc_ns = mock_phc_read_locked(phc);
-	spin_unlock_irqrestore(&phc->lock, flags);
+	tai_ns = ktime_get_clocktai_ns();
+	tai_sec = div_u64(tai_ns, NSEC_PER_SEC);
+	late_ns = tai_ns - tai_sec * NSEC_PER_SEC;
 
-	sec = div_u64(phc_ns, NSEC_PER_SEC);
+	if (tai_sec != phc->last_extts_sec) {
+		phc->last_extts_sec = tai_sec;
 
-	if (sec != phc->last_extts_sec) {
-		phc->last_extts_sec = sec;
+		spin_lock_irqsave(&phc->lock, flags);
+		phc_ns = mock_phc_read_locked(phc);
+		spin_unlock_irqrestore(&phc->lock, flags);
 
-		event.timestamp = sec * NSEC_PER_SEC;
+		event.timestamp = phc_ns - late_ns;
 		event.type = PTP_CLOCK_EXTTS;
 		event.index = phc->extts_channel;
 		ptp_clock_event(phc->clock, &event);
 	}
 
-reschedule:
-	hrtimer_forward_now(timer, ns_to_ktime(EXTTS_POLL_NS));
+	/* Aim for ~1 ms after the next TAI second (MONOTONIC ≈ TAI rate). */
+	next_delta_ns = (NSEC_PER_SEC - late_ns) + EXTTS_EDGE_SLACK_NS;
+	if (next_delta_ns < EXTTS_EDGE_SLACK_NS)
+		next_delta_ns = EXTTS_EDGE_SLACK_NS;
+	hrtimer_forward_now(timer, ns_to_ktime(next_delta_ns));
 	return HRTIMER_RESTART;
 }
 
@@ -172,8 +192,25 @@ static int mock_phc_enable(struct ptp_clock_info *info,
 		if (rq->extts.index >= info->n_ext_ts)
 			return -EINVAL;
 		if (on) {
+			unsigned long flags;
+			u64 mono_ns, tai_ns;
+
 			phc->extts_channel = rq->extts.index;
-			phc->last_extts_sec = 0;
+			/*
+			 * One-shot: park PHC near current TAI so the first
+			 * ts2phc samples are small.  After this the PHC runs
+			 * from MONOTONIC and is immune to phc2sys.
+			 */
+			spin_lock_irqsave(&phc->lock, flags);
+			mono_ns = ktime_get_ns();
+			tai_ns = ktime_get_clocktai_ns();
+			phc->last_mono_ns = mono_ns;
+			phc->offset_ns = (s64)tai_ns - (s64)mono_ns;
+			phc->freq_ppb = 0;
+			spin_unlock_irqrestore(&phc->lock, flags);
+
+			/* Avoid a spurious edge for the current TAI second */
+			phc->last_extts_sec = div_u64(tai_ns, NSEC_PER_SEC);
 			/* Barrier ensures channel/sec are visible before flag */
 			smp_wmb();
 			WRITE_ONCE(phc->extts_enabled, true);
@@ -270,7 +307,7 @@ struct mock_phc *mock_phc_create(struct device *dev, int logical_clk_id)
 
 	phc->clock = ptp_clock_register(&phc->info, dev);
 	if (!IS_ERR(phc->clock))
-		hrtimer_start(&phc->extts_timer, ns_to_ktime(EXTTS_POLL_NS),
+		hrtimer_start(&phc->extts_timer, ns_to_ktime(EXTTS_IDLE_POLL_NS),
 			      HRTIMER_MODE_REL);
 	if (IS_ERR(phc->clock)) {
 		err = PTR_ERR(phc->clock);

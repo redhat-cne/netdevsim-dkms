@@ -133,6 +133,56 @@ static const struct dpll_pin_ops nsim_dpll_rclk_pin_ops = {
 	.phase_offset_get   = nsim_dpll_pin_phase_offset_get,
 };
 
+/* Match gnss-sim default --holdover-timeout (Kind cannot write sysfs). */
+#define NSIM_DPLL_HOLDOVER_TIMEOUT_SEC	5
+
+static void nsim_dpll_set_lock_status(struct nsim_dpll *ndpll,
+				     enum dpll_lock_status status)
+{
+	if (ndpll->lock_status == status)
+		return;
+	ndpll->lock_status = status;
+	schedule_work(&ndpll->ntf_work);
+}
+
+static enum hrtimer_restart nsim_dpll_holdover_timer_cb(struct hrtimer *timer)
+{
+	struct nsim_dpll *ndpll = container_of(timer, struct nsim_dpll,
+					       holdover_timer);
+
+	/*
+	 * Coasting window expired: drop to FREERUN while GNSS remains lost.
+	 * Restore (GGA fix / UBX clear) cancels this timer before fire.
+	 */
+	if (ndpll->lock_status == DPLL_LOCK_STATUS_HOLDOVER &&
+	    (ndpll->gnss_gps_fix == 0 || ndpll->signal_blocked)) {
+		nsim_dpll_set_lock_status(ndpll, DPLL_LOCK_STATUS_UNLOCKED);
+		pr_info("netdevsim: DPLL HOLDOVER → FREERUN (holdover timeout)\n");
+	}
+	return HRTIMER_NORESTART;
+}
+
+static void nsim_dpll_enter_holdover(struct nsim_dpll *ndpll)
+{
+	if (ndpll->lock_status != DPLL_LOCK_STATUS_HOLDOVER) {
+		nsim_dpll_set_lock_status(ndpll, DPLL_LOCK_STATUS_HOLDOVER);
+		pr_info("netdevsim: DPLL → HOLDOVER (GNSS signal lost)\n");
+	}
+	hrtimer_start(&ndpll->holdover_timer,
+		      ns_to_ktime(NSIM_DPLL_HOLDOVER_TIMEOUT_SEC * (u64)NSEC_PER_SEC),
+		      HRTIMER_MODE_REL);
+}
+
+static void nsim_dpll_enter_locked(struct nsim_dpll *ndpll)
+{
+	hrtimer_cancel(&ndpll->holdover_timer);
+	if (ndpll->lock_status != DPLL_LOCK_STATUS_LOCKED_HO_ACQ) {
+		nsim_dpll_set_lock_status(ndpll,
+					 DPLL_LOCK_STATUS_LOCKED_HO_ACQ);
+		pr_info("netdevsim: DPLL → LOCKED (GNSS signal restored)\n");
+	}
+}
+
 /* ---- sysfs: writable lock_status for user-space DPLL control ----------- */
 
 static ssize_t nsim_dpll_lock_status_show(struct kobject *kobj,
@@ -171,15 +221,21 @@ static ssize_t nsim_dpll_lock_status_store(struct kobject *kobj,
 	else
 		return -EINVAL;
 
-	/* When signal is blocked via UBX CFG-VALSET, the kernel controls
-	 * lock_status transitions; ignore sysfs writes from gnss-sim. */
-	if (ndpll->signal_blocked)
+	/*
+	 * When signal is blocked via UBX CFG-VALSET or NMEA GGA NoFix, the
+	 * kernel owns lock_status (incl. holdover→freerun timer).  Ignore
+	 * sysfs writes so Kind RO /sys does not matter for that path.
+	 */
+	if (ndpll->signal_blocked || ndpll->gnss_gps_fix == 0)
 		return count;
 
-	if (new_status != ndpll->lock_status) {
-		ndpll->lock_status = new_status;
-		dpll_device_change_ntf(ndpll->pps_dpll);
-		dpll_device_change_ntf(ndpll->eec_dpll);
+	if (new_status == DPLL_LOCK_STATUS_HOLDOVER)
+		nsim_dpll_enter_holdover(ndpll);
+	else if (new_status == DPLL_LOCK_STATUS_LOCKED_HO_ACQ)
+		nsim_dpll_enter_locked(ndpll);
+	else {
+		hrtimer_cancel(&ndpll->holdover_timer);
+		nsim_dpll_set_lock_status(ndpll, new_status);
 	}
 
 	return count;
@@ -421,6 +477,11 @@ static u8 nsim_gga_quality_to_gps_fix(u8 gga_quality)
  * the fix quality from field 6.  The buffer may contain multiple
  * concatenated NMEA sentences from a single write() call, so we
  * search for '$' start markers rather than only checking buf[0].
+ *
+ * Drive DPLL lock_status from fix quality so gnss-sim API signal
+ * loss/restore works without writing Kind's read-only /sys:
+ *   GGA quality 0 (NoFix) → HOLDOVER → FREERUN after timeout
+ *   GGA quality >0        → LOCKED
  */
 static void nsim_parse_gga_fix(struct nsim_dpll *ndpll,
 			       const unsigned char *buf, size_t count)
@@ -444,13 +505,29 @@ static void nsim_parse_gga_fix(struct nsim_dpll *ndpll,
 			if (buf[i] == ',') {
 				commas++;
 				if (commas == 5) {
-					if (i + 1 < count &&
-					    buf[i + 1] >= '0' &&
-					    buf[i + 1] <= '9') {
-						ndpll->gnss_gps_fix =
-							nsim_gga_quality_to_gps_fix(
-								buf[i + 1] - '0');
-					}
+					u8 old_fix, new_fix;
+
+					if (i + 1 >= count ||
+					    buf[i + 1] < '0' ||
+					    buf[i + 1] > '9')
+						return;
+
+					old_fix = ndpll->gnss_gps_fix;
+					new_fix = nsim_gga_quality_to_gps_fix(
+						buf[i + 1] - '0');
+					ndpll->gnss_gps_fix = new_fix;
+
+					/* UBX CFG-VALSET path owns DPLL state */
+					if (ndpll->signal_blocked)
+						return;
+
+					if (new_fix == 0 && old_fix != 0)
+						nsim_dpll_enter_holdover(ndpll);
+					else if (new_fix != 0 &&
+						 (old_fix == 0 ||
+						  ndpll->lock_status !=
+						  DPLL_LOCK_STATUS_LOCKED_HO_ACQ))
+						nsim_dpll_enter_locked(ndpll);
 					return;
 				}
 			}
@@ -463,6 +540,20 @@ static void nsim_parse_gga_fix(struct nsim_dpll *ndpll,
 
 static int nsim_gnss_open(struct gnss_device *gdev)
 {
+	struct nsim_dpll *ndpll = gnss_get_drvdata(gdev);
+
+	/*
+	 * linuxptp-daemon's ubxtool monitor runs as
+	 * `ubxtool -t -P … -w <huge>` and expects unsolicited NAV-STATUS
+	 * / NAV-CLOCK.  Real receivers emit those after CFG-MSGOUT enable;
+	 * our CFG-VALSET path does not decode those keys, so start the
+	 * periodic UBX emitter as soon as the device is opened.
+	 */
+	if (ndpll && !ndpll->ubx_nav_enabled) {
+		ndpll->ubx_nav_enabled = true;
+		hrtimer_start(&ndpll->ubx_timer, ns_to_ktime(NSEC_PER_SEC),
+			      HRTIMER_MODE_REL);
+	}
 	return 0;
 }
 
@@ -569,15 +660,14 @@ static int nsim_gnss_write_raw(struct gnss_device *gdev,
 					if (val > 0) {
 						ndpll->signal_blocked = true;
 						ndpll->gnss_gps_fix = 0x00;
-						ndpll->lock_status = DPLL_LOCK_STATUS_HOLDOVER;
+						nsim_dpll_enter_holdover(ndpll);
 						pr_info("netdevsim: UBX CFG-VALSET INFIL_NCNOTHRS=%u → signal blocked, holdover\n", val);
 					} else {
-					ndpll->signal_blocked = false;
-					ndpll->gnss_gps_fix = 0x03;
-					ndpll->lock_status = DPLL_LOCK_STATUS_LOCKED_HO_ACQ;
+						ndpll->signal_blocked = false;
+						ndpll->gnss_gps_fix = 0x03;
+						nsim_dpll_enter_locked(ndpll);
 						pr_info("netdevsim: UBX CFG-VALSET INFIL_NCNOTHRS=0 → signal restored, locked\n");
 					}
-					schedule_work(&ndpll->ntf_work);
 					kv++;
 					pos++;
 					break;
@@ -781,6 +871,8 @@ int nsim_dpll_init(struct nsim_dev *nsim_dev)
 	ndpll->ntf_timer.function = nsim_dpll_ntf_timer_cb;
 	hrtimer_start(&ndpll->ntf_timer, ns_to_ktime(NSEC_PER_SEC),
 		      HRTIMER_MODE_REL);
+	hrtimer_init(&ndpll->holdover_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	ndpll->holdover_timer.function = nsim_dpll_holdover_timer_cb;
 
 	nsim_dev->dpll = ndpll;
 
@@ -1011,6 +1103,7 @@ void nsim_dpll_exit(struct nsim_dev *nsim_dev)
 	}
 
 	hrtimer_cancel(&ndpll->ntf_timer);
+	hrtimer_cancel(&ndpll->holdover_timer);
 	cancel_work_sync(&ndpll->ntf_work);
 
 	if (ndpll->gnss_dev) {

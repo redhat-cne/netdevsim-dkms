@@ -98,6 +98,7 @@ struct nsim_dpll {
 	struct gnss_device *gnss_dev;
 	struct hrtimer ubx_timer;
 	struct hrtimer ntf_timer;
+	struct hrtimer holdover_timer;
 	struct work_struct ntf_work;
 	spinlock_t gnss_lock;
 	bool ubx_nav_enabled;

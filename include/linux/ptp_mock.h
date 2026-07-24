@@ -19,8 +19,8 @@ struct mock_phc {
 	int logical_clk_id;
 	struct kref ref;
 	spinlock_t lock;
-	/* MONOTONIC-based timekeeping (immune to phc2sys steps) */
-	s64 offset_ns;		/* PHC = monotonic + offset_ns */
+	/* MONOTONIC-based timekeeping (immune to phc2sys stepping REALTIME/TAI) */
+	s64 offset_ns;		/* PHC = CLOCK_MONOTONIC + offset_ns */
 	s64 freq_ppb;		/* rate correction from adjfine */
 	u64 last_mono_ns;	/* CLOCK_MONOTONIC snapshot at last update */
 	/*
@@ -33,7 +33,7 @@ struct mock_phc {
 	struct hrtimer extts_timer;
 	bool extts_enabled;
 	int extts_channel;
-	u64 last_extts_sec;	/* dedup: last PHC second we reported */
+	u64 last_extts_sec;	/* dedup: last CLOCK_TAI second we reported */
 };
 
 #if IS_ENABLED(CONFIG_PTP_1588_CLOCK_MOCK)
