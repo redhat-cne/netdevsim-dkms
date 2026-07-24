@@ -683,7 +683,10 @@ int nsim_dpll_init(struct nsim_dev *nsim_dev)
 	if (err)
 		goto err_eec_put;
 
-	/* GNSS input pin on PPS DPLL */
+	/* GNSS input pin on both EEC and PPS DPLLs (matches real E810 behavior).
+	 * linuxptp-daemon expects pin.ParentDevice to have entries at both
+	 * index 0 (EEC) and index 1 (PPS) — the phase offset is read from
+	 * ParentDevice[PPS_PIN_INDEX=1].PhaseOffset. */
 	ndpll->gnss_pin_priv.direction = DPLL_PIN_DIRECTION_INPUT;
 	ndpll->gnss_pin_priv.frequency = DPLL_PIN_FREQUENCY_1_HZ;
 
@@ -695,11 +698,17 @@ int nsim_dpll_init(struct nsim_dev *nsim_dev)
 		goto err_eec_unreg;
 	}
 
-	err = dpll_pin_register(ndpll->pps_dpll, ndpll->gnss_pin,
+	err = dpll_pin_register(ndpll->eec_dpll, ndpll->gnss_pin,
 				&nsim_dpll_gnss_pin_ops,
 				&ndpll->gnss_pin_priv);
 	if (err)
 		goto err_gnss_put;
+
+	err = dpll_pin_register(ndpll->pps_dpll, ndpll->gnss_pin,
+				&nsim_dpll_gnss_pin_ops,
+				&ndpll->gnss_pin_priv);
+	if (err)
+		goto err_gnss_unreg_eec;
 
 	/* E810-compatible external pins (SMA1, SMA2, U.FL1, U.FL2) */
 	{
@@ -729,10 +738,21 @@ int nsim_dpll_init(struct nsim_dev *nsim_dev)
 			ndpll->ext_pin_privs[i].frequency =
 				DPLL_PIN_FREQUENCY_1_HZ;
 
+			err = dpll_pin_register(ndpll->eec_dpll, epin,
+						&nsim_dpll_gnss_pin_ops,
+						&ndpll->ext_pin_privs[i]);
+			if (err) {
+				dpll_pin_put(epin);
+				goto err_ext_cleanup;
+			}
+
 			err = dpll_pin_register(ndpll->pps_dpll, epin,
 						&nsim_dpll_gnss_pin_ops,
 						&ndpll->ext_pin_privs[i]);
 			if (err) {
+				dpll_pin_unregister(ndpll->eec_dpll, epin,
+						    &nsim_dpll_gnss_pin_ops,
+						    &ndpll->ext_pin_privs[i]);
 				dpll_pin_put(epin);
 				goto err_ext_cleanup;
 			}
@@ -796,9 +816,19 @@ int nsim_dpll_init(struct nsim_dev *nsim_dev)
 				goto err_ports_cleanup;
 			}
 
+			err = dpll_pin_register(ndpll->eec_dpll, pin,
+						&nsim_dpll_rclk_pin_ops, npin);
+			if (err) {
+				dpll_pin_put(pin);
+				kfree(npin);
+				goto err_ports_cleanup;
+			}
+
 			err = dpll_pin_register(ndpll->pps_dpll, pin,
 						&nsim_dpll_rclk_pin_ops, npin);
 			if (err) {
+				dpll_pin_unregister(ndpll->eec_dpll, pin,
+						    &nsim_dpll_rclk_pin_ops, npin);
 				dpll_pin_put(pin);
 				kfree(npin);
 				goto err_ports_cleanup;
@@ -933,11 +963,18 @@ err_ext_cleanup:
 					    ndpll->ext_pins[i],
 					    &nsim_dpll_gnss_pin_ops,
 					    &ndpll->ext_pin_privs[i]);
+			dpll_pin_unregister(ndpll->eec_dpll,
+					    ndpll->ext_pins[i],
+					    &nsim_dpll_gnss_pin_ops,
+					    &ndpll->ext_pin_privs[i]);
 			dpll_pin_put(ndpll->ext_pins[i]);
 		}
 		ndpll->num_ext_pins = 0;
 	}
 	dpll_pin_unregister(ndpll->pps_dpll, ndpll->gnss_pin,
+			    &nsim_dpll_gnss_pin_ops, &ndpll->gnss_pin_priv);
+err_gnss_unreg_eec:
+	dpll_pin_unregister(ndpll->eec_dpll, ndpll->gnss_pin,
 			    &nsim_dpll_gnss_pin_ops, &ndpll->gnss_pin_priv);
 err_gnss_put:
 	dpll_pin_put(ndpll->gnss_pin);
@@ -961,6 +998,8 @@ static void nsim_dpll_cleanup_port_pins(struct nsim_dpll *ndpll)
 	list_for_each_entry_safe(npin, tmp, &ndpll->port_pins, list) {
 		dpll_netdev_pin_clear(npin->ns->netdev);
 		dpll_pin_unregister(ndpll->pps_dpll, npin->pin,
+				    &nsim_dpll_rclk_pin_ops, npin);
+		dpll_pin_unregister(ndpll->eec_dpll, npin->pin,
 				    &nsim_dpll_rclk_pin_ops, npin);
 		dpll_pin_put(npin->pin);
 		list_del(&npin->list);
@@ -1002,12 +1041,18 @@ void nsim_dpll_exit(struct nsim_dev *nsim_dev)
 					    ndpll->ext_pins[i],
 					    &nsim_dpll_gnss_pin_ops,
 					    &ndpll->ext_pin_privs[i]);
+			dpll_pin_unregister(ndpll->eec_dpll,
+					    ndpll->ext_pins[i],
+					    &nsim_dpll_gnss_pin_ops,
+					    &ndpll->ext_pin_privs[i]);
 			dpll_pin_put(ndpll->ext_pins[i]);
 		}
 		ndpll->num_ext_pins = 0;
 	}
 
 	dpll_pin_unregister(ndpll->pps_dpll, ndpll->gnss_pin,
+			    &nsim_dpll_gnss_pin_ops, &ndpll->gnss_pin_priv);
+	dpll_pin_unregister(ndpll->eec_dpll, ndpll->gnss_pin,
 			    &nsim_dpll_gnss_pin_ops, &ndpll->gnss_pin_priv);
 	dpll_pin_put(ndpll->gnss_pin);
 
