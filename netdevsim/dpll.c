@@ -207,6 +207,16 @@ static ssize_t nsim_dpll_lock_status_store(struct kobject *kobj,
 
 #define UBX_CFG_VALSET_HDR_LEN	4
 #define UBX_CFGKEY_INFIL_NCNOTHRS 0x201100aa
+/* CFG-MSGOUT group (bits 23:16 of the 32-bit key). linuxptp-daemon enables
+ * periodic NAV-STATUS/NAV-CLOCK via CFG-VALSET CFG-MSGOUT-UBX_NAV_* keys
+ * rather than classic CFG-MSG. */
+#define UBX_CFG_GROUP_MSGOUT	0x91
+/* Item IDs for UBX-NAV-STATUS on I2C/UART1/UART2/USB/SPI (0x2091001a..1e) */
+#define UBX_MSGOUT_NAV_STATUS_FIRST	0x001a
+#define UBX_MSGOUT_NAV_STATUS_LAST	0x001e
+/* Item IDs for UBX-NAV-CLOCK on I2C/UART1/UART2/USB/SPI (0x20910065..69) */
+#define UBX_MSGOUT_NAV_CLOCK_FIRST	0x0065
+#define UBX_MSGOUT_NAV_CLOCK_LAST	0x0069
 
 #define UBX_NAV_STATUS_LEN	16
 #define UBX_NAV_CLOCK_LEN	20
@@ -476,6 +486,38 @@ static void nsim_gnss_close(struct gnss_device *gdev)
 	}
 }
 
+/* Start the 1 Hz NAV-STATUS/NAV-CLOCK emitter if not already running. */
+static void nsim_ubx_enable_nav_timer(struct nsim_dpll *ndpll)
+{
+	if (ndpll->ubx_nav_enabled)
+		return;
+
+	ndpll->ubx_nav_enabled = true;
+	hrtimer_start(&ndpll->ubx_timer, ns_to_ktime(NSEC_PER_SEC),
+		      HRTIMER_MODE_REL);
+	pr_info("netdevsim: UBX NAV-STATUS/NAV-CLOCK timer enabled\n");
+}
+
+/* True if key is CFG-MSGOUT-UBX_NAV_{STATUS,CLOCK}_* with a non-zero rate. */
+static bool nsim_ubx_cfgkey_enables_nav(u32 key, u8 val)
+{
+	u8 group = (key >> 16) & 0xff;
+	u16 item = key & 0xffff;
+
+	if (group != UBX_CFG_GROUP_MSGOUT || val == 0)
+		return false;
+
+	if (item >= UBX_MSGOUT_NAV_STATUS_FIRST &&
+	    item <= UBX_MSGOUT_NAV_STATUS_LAST)
+		return true;
+
+	if (item >= UBX_MSGOUT_NAV_CLOCK_FIRST &&
+	    item <= UBX_MSGOUT_NAV_CLOCK_LAST)
+		return true;
+
+	return false;
+}
+
 static int nsim_gnss_write_raw(struct gnss_device *gdev,
 			       const unsigned char *buf, size_t count)
 {
@@ -499,22 +541,12 @@ static int nsim_gnss_write_raw(struct gnss_device *gdev,
 		return count;
 	}
 
-	// #region agent log
-	pr_info("netdevsim: d753ad gnss_write_raw: count=%zu first=0x%02x signal_blocked=%d\n",
-		count, buf[0], ndpll->signal_blocked);
-	// #endregion
-
 	/* UBX frame: sync(2) + class(1) + id(1) + len(2) minimum */
 	if (count < UBX_HDR_LEN || buf[0] != UBX_SYNC1 || buf[1] != UBX_SYNC2)
 		return count;
 
 	cls = buf[2];
 	id = buf[3];
-
-	// #region agent log
-	pr_info("netdevsim: d753ad UBX frame: cls=0x%02x id=0x%02x count=%zu\n",
-		cls, id, count);
-	// #endregion
 
 	switch (cls) {
 	case UBX_CLASS_MON:
@@ -531,14 +563,8 @@ static int nsim_gnss_write_raw(struct gnss_device *gdev,
 
 			if (msg_cls == UBX_CLASS_NAV &&
 			    (msg_id == UBX_NAV_STATUS ||
-			     msg_id == UBX_NAV_CLOCK)) {
-				if (!ndpll->ubx_nav_enabled) {
-					ndpll->ubx_nav_enabled = true;
-					hrtimer_start(&ndpll->ubx_timer,
-						      ns_to_ktime(NSEC_PER_SEC),
-						      HRTIMER_MODE_REL);
-				}
-			}
+			     msg_id == UBX_NAV_CLOCK))
+				nsim_ubx_enable_nav_timer(ndpll);
 
 			len = ubx_build_ack(resp, sizeof(resp), cls, id);
 			if (len > 0)
@@ -549,41 +575,38 @@ static int nsim_gnss_write_raw(struct gnss_device *gdev,
 			size_t kv_end = count - UBX_CK_LEN;
 			size_t pos = UBX_HDR_LEN + UBX_CFG_VALSET_HDR_LEN;
 
-			// #region agent log
-			pr_info("netdevsim: d753ad CFG-VALSET: payload_start=%zu kv_end=%zu\n",
-				pos, kv_end);
-			// #endregion
-			while (pos + 4 < kv_end) {
+			/* Key/value pairs are U1-sized for the keys we handle
+			 * (CFG-MSGOUT rates and INFIL_NCNOTHRS). */
+			while (pos + 5 <= kv_end) {
 				u32 key = kv[0] | (kv[1] << 8) |
 					  (kv[2] << 16) | (kv[3] << 24);
-				kv += 4;
-				pos += 4;
+				u8 val = kv[4];
 
-				// #region agent log
-				pr_info("netdevsim: d753ad CFG-VALSET key=0x%08x pos=%zu expect=0x%08x\n",
-					key, pos, UBX_CFGKEY_INFIL_NCNOTHRS);
-				// #endregion
-				if (key == UBX_CFGKEY_INFIL_NCNOTHRS && pos < kv_end) {
-					u8 val = *kv;
+				kv += 5;
+				pos += 5;
 
+				if (nsim_ubx_cfgkey_enables_nav(key, val)) {
+					nsim_ubx_enable_nav_timer(ndpll);
+					continue;
+				}
+
+				if (key == UBX_CFGKEY_INFIL_NCNOTHRS) {
 					if (val > 0) {
 						ndpll->signal_blocked = true;
 						ndpll->gnss_gps_fix = 0x00;
-						ndpll->lock_status = DPLL_LOCK_STATUS_HOLDOVER;
-						pr_info("netdevsim: UBX CFG-VALSET INFIL_NCNOTHRS=%u → signal blocked, holdover\n", val);
+						ndpll->lock_status =
+							DPLL_LOCK_STATUS_HOLDOVER;
+						pr_info("netdevsim: UBX CFG-VALSET INFIL_NCNOTHRS=%u → signal blocked, holdover\n",
+							val);
 					} else {
-					ndpll->signal_blocked = false;
-					ndpll->gnss_gps_fix = 0x03;
-					ndpll->lock_status = DPLL_LOCK_STATUS_LOCKED_HO_ACQ;
+						ndpll->signal_blocked = false;
+						ndpll->gnss_gps_fix = 0x03;
+						ndpll->lock_status =
+							DPLL_LOCK_STATUS_LOCKED_HO_ACQ;
 						pr_info("netdevsim: UBX CFG-VALSET INFIL_NCNOTHRS=0 → signal restored, locked\n");
 					}
 					schedule_work(&ndpll->ntf_work);
-					kv++;
-					pos++;
-					break;
 				}
-				kv++;
-				pos++;
 			}
 
 			len = ubx_build_ack(resp, sizeof(resp), cls, id);
