@@ -591,6 +591,34 @@ static int nsim_gnss_write_raw(struct gnss_device *gdev,
 				nsim_ubx_insert_locked(ndpll, resp, len);
 		}
 		break;
+	case UBX_CLASS_NAV:
+		/*
+		 * Real u-blox receivers answer NAV polls with the message
+		 * payload (not just ACK).  linuxptp-daemon's ubxtool path
+		 * requires UBX-NAV-STATUS to advance gnss State beyond s0.
+		 */
+		if (id == UBX_NAV_STATUS || id == UBX_NAV_CLOCK) {
+			if (!ndpll->ubx_nav_enabled) {
+				ndpll->ubx_nav_enabled = true;
+				hrtimer_start(&ndpll->ubx_timer,
+					      ns_to_ktime(NSEC_PER_SEC),
+					      HRTIMER_MODE_REL);
+			}
+
+			if (id == UBX_NAV_STATUS)
+				len = ubx_build_nav_status(resp, sizeof(resp),
+							   ndpll->gnss_gps_fix);
+			else
+				len = ubx_build_nav_clock(resp, sizeof(resp),
+							  ndpll->gnss_gps_fix);
+			if (len > 0)
+				nsim_ubx_insert_locked(ndpll, resp, len);
+		} else {
+			len = ubx_build_ack(resp, sizeof(resp), cls, id);
+			if (len > 0)
+				nsim_ubx_insert_locked(ndpll, resp, len);
+		}
+		break;
 	default:
 		len = ubx_build_ack(resp, sizeof(resp), cls, id);
 		if (len > 0)
