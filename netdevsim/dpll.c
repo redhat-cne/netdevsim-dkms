@@ -133,8 +133,11 @@ static const struct dpll_pin_ops nsim_dpll_rclk_pin_ops = {
 	.phase_offset_get   = nsim_dpll_pin_phase_offset_get,
 };
 
-/* Match gnss-sim default --holdover-timeout (Kind cannot write sysfs). */
-#define NSIM_DPLL_HOLDOVER_TIMEOUT_SEC	5
+/* Match gnss-sim default --holdover-timeout (Kind cannot write sysfs).
+ * Keep long enough for TGMBC cascading-holdover tests to observe CC7 on the BC
+ * before FREERUN/CC248 (announce + CLOCK_CLASS_CHANGE propagation).
+ */
+#define NSIM_DPLL_HOLDOVER_TIMEOUT_SEC	30
 
 static void nsim_dpll_set_lock_status(struct nsim_dpll *ndpll,
 				     enum dpll_lock_status status)
