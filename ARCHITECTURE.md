@@ -258,7 +258,12 @@ netdevsim-dkms/
 │   ├── psample.c               # Packet sampling (optional)
 │   └── macsec.c                # MACsec offload (optional)
 ├── scripts/
+│   ├── create-vrt-clocks.sh    # Per-Kind-node stand-in mock PHCs (virtual RT)
 │   └── test-utm-ubuntu.sh      # Local macOS testing via UTM
+├── shim/                       # CI LD_PRELOAD: phc2sys CLOCK_REALTIME → mock PHC
+│   ├── ptp_vrt_shim.c
+│   ├── phc2sys-wrapper
+│   └── README.md
 ├── Makefile                    # Top-level: ordered build, tarball, RPM
 ├── dkms.conf                   # DKMS registration (4 modules)
 ├── install-udev-rule.sh        # POST_INSTALL hook

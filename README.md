@@ -125,6 +125,13 @@ When using netdevsim inside containers or Kubernetes pods:
 - **Kubernetes pods:** The udev rule creates real `/dev/ptpN` device
   nodes (not symlinks) so they propagate into containers.
 
+- **Virtual CLOCK_REALTIME (CI):** Kind workers share one host
+  `CLOCK_REALTIME`. Use `scripts/create-vrt-clocks.sh` plus the
+  `shim/` LD_PRELOAD (packaged in the linuxptp-daemon image) so each
+  node's `phc2sys -a -r` disciplines a dedicated stand-in mock PHC.
+  See [shim/README.md](shim/README.md). This is not a second kernel
+  realtime clock.
+
 ## Local libvirt/KVM VMs (Linux x86_64)
 
 ### Prerequisites
