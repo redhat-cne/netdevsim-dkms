@@ -259,6 +259,9 @@ netdevsim-dkms/
 │   └── macsec.c                # MACsec offload (optional)
 ├── scripts/
 │   ├── create-vrt-clocks.sh    # Per-Kind-node stand-in mock PHCs (virtual RT)
+│   ├── test-dpll.sh            # DPLL unit tests (make test-dpll)
+│   ├── test-phc.sh             # Mock PHC unit tests (make test-phc)
+│   ├── test-gnss-ubx.sh        # GNSS/UBX unit tests (make test-gnss-ubx)
 │   └── test-utm-ubuntu.sh      # Local macOS testing via UTM
 ├── shim/                       # CI LD_PRELOAD: phc2sys CLOCK_REALTIME → mock PHC
 │   ├── ptp_vrt_shim.c
