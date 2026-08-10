@@ -1,0 +1,24 @@
+#!/bin/bash
+# Wrapper installed as /usr/sbin/phc2sys in the linuxptp-daemon image.
+# When a per-node VRT device file is present, preload the stand-in RT shim.
+set -euo pipefail
+
+REAL_PHC2SYS="${PTP_VRT_REAL_PHC2SYS:-/usr/sbin/phc2sys.real}"
+SHIM="${PTP_VRT_SHIM:-/usr/local/lib/libptp_vrt_shim.so}"
+DEVICE_FILE="${PTP_VRT_DEVICE_FILE:-/var/run/vrt/device}"
+
+if [[ -z "${PTP_VRT_PHC:-}" && -f "$DEVICE_FILE" ]]; then
+	PTP_VRT_PHC="$(tr -d '[:space:]' <"$DEVICE_FILE")"
+	export PTP_VRT_PHC
+fi
+
+if [[ -n "${PTP_VRT_PHC:-}" && -e "${PTP_VRT_PHC}" && -f "$SHIM" ]]; then
+	export PTP_VRT_PHC
+	if [[ -n "${LD_PRELOAD:-}" ]]; then
+		export LD_PRELOAD="${SHIM}:${LD_PRELOAD}"
+	else
+		export LD_PRELOAD="${SHIM}"
+	fi
+fi
+
+exec "$REAL_PHC2SYS" "$@"

@@ -35,13 +35,14 @@ substantially different kernel version will likely require source modifications.
 ### Using DKMS (recommended)
 
 ```bash
-# Copy source tree to the DKMS source directory
-sudo cp -r . /usr/src/netdevsim-6.9.5
+# One-shot install (copy sources, dkms add/build/install, udev rules)
+make dkms-install
 
-# Register and build
-sudo dkms add netdevsim/6.9.5
-sudo dkms build netdevsim/6.9.5
-sudo dkms install netdevsim/6.9.5
+# Or manually:
+# sudo cp -r . /usr/src/netdevsim-6.9.5
+# sudo dkms add netdevsim/6.9.5
+# sudo dkms build netdevsim/6.9.5
+# sudo dkms install netdevsim/6.9.5
 ```
 
 ### Manual build (without DKMS)
@@ -54,8 +55,11 @@ sudo make modules_install
 ## Uninstallation
 
 ```bash
-sudo dkms remove netdevsim/6.9.5 --all
-sudo rm -rf /usr/src/netdevsim-6.9.5
+make dkms-uninstall
+
+# Or manually:
+# sudo dkms remove netdevsim/6.9.5 --all
+# sudo rm -rf /usr/src/netdevsim-6.9.5
 ```
 
 ## Loading the modules
@@ -124,6 +128,33 @@ When using netdevsim inside containers or Kubernetes pods:
 
 - **Kubernetes pods:** The udev rule creates real `/dev/ptpN` device
   nodes (not symlinks) so they propagate into containers.
+
+- **Virtual CLOCK_REALTIME (CI):** Kind workers share one host
+  `CLOCK_REALTIME`. Use `scripts/create-vrt-clocks.sh` plus the
+  `shim/` LD_PRELOAD (packaged in the linuxptp-daemon image) so each
+  node's `phc2sys -a -r` disciplines a dedicated stand-in mock PHC.
+  See [shim/README.md](shim/README.md). This is not a second kernel
+  realtime clock.
+
+## Unit Tests
+
+Requires root and DKMS modules installed (`make dkms-install`). Scripts load
+modules unless `--no-load` is passed.
+
+```bash
+make test-dpll       # DPLL sysfs / netlink / lock_status
+make test-phc        # mock PHC get/set/adj/EXTTS / sharing
+make test-gnss-ubx   # GNSS UBX + NMEA signal block/restore
+make test-all        # all of the above
+```
+
+Or run the scripts directly:
+
+```bash
+sudo ./scripts/test-dpll.sh [--no-load] [--verbose]
+sudo ./scripts/test-phc.sh [--no-load] [--verbose]
+sudo ./scripts/test-gnss-ubx.sh [--no-load] [--verbose]
+```
 
 ## Local libvirt/KVM VMs (Linux x86_64)
 
