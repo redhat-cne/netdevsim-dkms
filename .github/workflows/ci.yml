@@ -171,6 +171,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y podman
           podman --version
+          # Serialize podman CLI via one API server (avoids Kind exec SQLite deadlock).
+          sudo bash "$GITHUB_WORKSPACE/scripts/start-podman-api-service.sh"
 
       - name: Clone ptp-operator
         run: |
@@ -182,7 +184,7 @@ jobs:
           sudo bash -l <<'BUILD'
           set -euo pipefail
           set -x
-          export PATH=/usr/local/go/bin:/root/go/bin:$PATH
+          export PATH=/usr/local/ptp-podman-wrap:/usr/local/bin:/usr/local/go/bin:/root/go/bin:$PATH
           export KIND_EXPERIMENTAL_PROVIDER=podman
           export BUILDAH_LAYERS=true
           export BUILDAH_HISTORY=true
@@ -191,6 +193,8 @@ jobs:
           VM_IP=$(hostname -I | awk '{print $1}')
           cd /root/ptp-operator/scripts
           ./run-on-vm.sh --dkms --images "${VM_IP}"
+
+          rm -rf /tmp/go-build* /root/.cache/go-build
           BUILD
 
       - name: Upload image tarball
@@ -238,6 +242,8 @@ jobs:
             sudo apt-get install -y podman
           fi
           podman --version
+          # Serialize podman CLI via one API server (avoids Kind exec SQLite deadlock).
+          sudo bash "$GITHUB_WORKSPACE/scripts/start-podman-api-service.sh"
 
       - name: Install OpenShift CLI (oc)
         run: |
@@ -284,7 +290,7 @@ jobs:
           sudo bash -l <<'LOAD'
           set -euo pipefail
           set -x
-          export PATH=/usr/local/go/bin:/root/go/bin:$PATH
+          export PATH=/usr/local/ptp-podman-wrap:/usr/local/bin:/usr/local/go/bin:/root/go/bin:$PATH
           export KIND_EXPERIMENTAL_PROVIDER=podman
 
           VM_IP=$(hostname -I | awk '{print $1}')
@@ -292,12 +298,24 @@ jobs:
           ./run-on-vm.sh --dkms --load /tmp/ptp-images.tar "${VM_IP}"
           LOAD
 
+      - name: "Free disk space before tests"
+        run: |
+          sudo bash -l <<'CLEANUP'
+          set -euo pipefail
+          rm -rf /tmp/ptp-images.tar /tmp/ptp-images-load
+          rm -rf /tmp/go-build* /var/cache/apt /root/.cache
+          sync
+          echo 3 > /proc/sys/vm/drop_caches || true
+          df -h
+          free -h
+          CLEANUP
+
       - name: "Run scenario: ${{ matrix.mode }}"
         run: |
           sudo bash -l <<'DEPLOY'
           set -euo pipefail
           set -x
-          export PATH=/usr/local/go/bin:/root/go/bin:$PATH
+          export PATH=/usr/local/ptp-podman-wrap:/usr/local/bin:/usr/local/go/bin:/root/go/bin:$PATH
           export KIND_EXPERIMENTAL_PROVIDER=podman
 
           VM_IP=$(hostname -I | awk '{print $1}')
