@@ -38,31 +38,15 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install DKMS dependencies
-        timeout-minutes: 5
+        timeout-minutes: 8
         run: |
-          sudo apt-get update \
-            -o Acquire::http::Timeout=20 \
-            -o Acquire::https::Timeout=20 \
-            -o Acquire::Retries=2
-          sudo apt-get install -y \
-            -o Acquire::http::Timeout=20 \
-            -o Acquire::https::Timeout=20 \
-            -o Acquire::Retries=2 \
+          # sudo timeout so apt children die with the step (GHA timeout
+          # only kills the shell; leftover apt holds dpkg locks).
+          APT=(apt-get -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o Acquire::Retries=2)
+          sudo timeout --kill-after=20 180 "${APT[@]}" update
+          sudo timeout --kill-after=20 180 "${APT[@]}" install -y \
             dkms gcc make ethtool linuxptp \
             linux-headers-$(uname -r)
-
-      # Optional: missing on some HWE ABIs (e.g. 7.0). When the package
-      # exists (22.04 Azure), apt can stall forever on a 71MB fetch from
-      # archive.ubuntu.com — cap it so a dead mirror cannot hang the job.
-      - name: Install optional extra kernel modules
-        timeout-minutes: 3
-        continue-on-error: true
-        run: |
-          sudo apt-get install -y \
-            -o Acquire::http::Timeout=20 \
-            -o Acquire::https::Timeout=20 \
-            -o Acquire::Retries=1 \
-            linux-modules-extra-$(uname -r)
 
       - name: Install DKMS source tree
         run: |
@@ -177,6 +161,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install latest podman
+        timeout-minutes: 8
         run: |
           . /etc/os-release
           sudo mkdir -p /etc/apt/keyrings
@@ -185,8 +170,9 @@ jobs:
           echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/devel_kubic_libcontainers_unstable.gpg] \
             https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/unstable/xUbuntu_${VERSION_ID}/ /" \
             | sudo tee /etc/apt/sources.list.d/devel:kubic:libcontainers:unstable.list >/dev/null
-          sudo apt-get update
-          sudo apt-get install -y podman
+          APT=(apt-get -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o Acquire::Retries=2)
+          sudo timeout --kill-after=20 180 "${APT[@]}" update
+          sudo timeout --kill-after=20 180 "${APT[@]}" install -y podman
           podman --version
           # Serialize podman CLI via one API server (avoids Kind exec SQLite deadlock).
           sudo bash "$GITHUB_WORKSPACE/scripts/start-podman-api-service.sh"
@@ -243,8 +229,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install latest podman
+        timeout-minutes: 8
         run: |
           . /etc/os-release
+          APT=(apt-get -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o Acquire::Retries=2)
           if [[ "${VERSION_ID}" == "22.04" ]]; then
             sudo mkdir -p /etc/apt/keyrings
             curl -fsSL "https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/unstable/xUbuntu_${VERSION_ID}/Release.key" \
@@ -252,12 +240,9 @@ jobs:
             echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/devel_kubic_libcontainers_unstable.gpg] \
               https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/unstable/xUbuntu_${VERSION_ID}/ /" \
               | sudo tee /etc/apt/sources.list.d/devel:kubic:libcontainers:unstable.list >/dev/null
-            sudo apt-get update
-            sudo apt-get install -y podman
-          else
-            sudo apt-get update
-            sudo apt-get install -y podman
           fi
+          sudo timeout --kill-after=20 180 "${APT[@]}" update
+          sudo timeout --kill-after=20 180 "${APT[@]}" install -y podman
           podman --version
           # Serialize podman CLI via one API server (avoids Kind exec SQLite deadlock).
           sudo bash "$GITHUB_WORKSPACE/scripts/start-podman-api-service.sh"
@@ -272,24 +257,12 @@ jobs:
           oc version --client
 
       - name: Install DKMS dependencies
-        timeout-minutes: 5
+        timeout-minutes: 8
         run: |
-          sudo apt-get install -y \
-            -o Acquire::http::Timeout=20 \
-            -o Acquire::https::Timeout=20 \
-            -o Acquire::Retries=2 \
+          APT=(apt-get -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o Acquire::Retries=2)
+          sudo timeout --kill-after=20 180 "${APT[@]}" install -y \
             dkms gcc make ethtool linuxptp \
             linux-headers-$(uname -r)
-
-      - name: Install optional extra kernel modules
-        timeout-minutes: 3
-        continue-on-error: true
-        run: |
-          sudo apt-get install -y \
-            -o Acquire::http::Timeout=20 \
-            -o Acquire::https::Timeout=20 \
-            -o Acquire::Retries=1 \
-            linux-modules-extra-$(uname -r)
 
       - name: Build and install DKMS modules
         run: |
