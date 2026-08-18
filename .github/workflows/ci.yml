@@ -23,6 +23,7 @@ jobs:
   # ------------------------------------------------------------------
   dkms-test:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -37,15 +38,31 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install DKMS dependencies
+        timeout-minutes: 5
         run: |
-          sudo apt-get update
-          sudo apt-get install -y dkms gcc make ethtool linuxptp \
+          sudo apt-get update \
+            -o Acquire::http::Timeout=20 \
+            -o Acquire::https::Timeout=20 \
+            -o Acquire::Retries=2
+          sudo apt-get install -y \
+            -o Acquire::http::Timeout=20 \
+            -o Acquire::https::Timeout=20 \
+            -o Acquire::Retries=2 \
+            dkms gcc make ethtool linuxptp \
             linux-headers-$(uname -r)
-          # linux-modules-extra is not published for every HWE ABI
-          # (e.g. 7.0 generic); extras live in linux-modules-* instead.
-          if ! sudo apt-get install -y linux-modules-extra-$(uname -r); then
-            echo "linux-modules-extra-$(uname -r) not available — continuing"
-          fi
+
+      # Optional: missing on some HWE ABIs (e.g. 7.0). When the package
+      # exists (22.04 Azure), apt can stall forever on a 71MB fetch from
+      # archive.ubuntu.com — cap it so a dead mirror cannot hang the job.
+      - name: Install optional extra kernel modules
+        timeout-minutes: 3
+        continue-on-error: true
+        run: |
+          sudo apt-get install -y \
+            -o Acquire::http::Timeout=20 \
+            -o Acquire::https::Timeout=20 \
+            -o Acquire::Retries=1 \
+            linux-modules-extra-$(uname -r)
 
       - name: Install DKMS source tree
         run: |
@@ -255,12 +272,24 @@ jobs:
           oc version --client
 
       - name: Install DKMS dependencies
+        timeout-minutes: 5
         run: |
-          sudo apt-get install -y dkms gcc make ethtool linuxptp \
+          sudo apt-get install -y \
+            -o Acquire::http::Timeout=20 \
+            -o Acquire::https::Timeout=20 \
+            -o Acquire::Retries=2 \
+            dkms gcc make ethtool linuxptp \
             linux-headers-$(uname -r)
-          if ! sudo apt-get install -y linux-modules-extra-$(uname -r); then
-            echo "linux-modules-extra-$(uname -r) not available — continuing"
-          fi
+
+      - name: Install optional extra kernel modules
+        timeout-minutes: 3
+        continue-on-error: true
+        run: |
+          sudo apt-get install -y \
+            -o Acquire::http::Timeout=20 \
+            -o Acquire::https::Timeout=20 \
+            -o Acquire::Retries=1 \
+            linux-modules-extra-$(uname -r)
 
       - name: Build and install DKMS modules
         run: |
