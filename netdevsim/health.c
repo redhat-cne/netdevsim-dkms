@@ -178,17 +178,31 @@ int nsim_dev_health_init(struct nsim_dev *nsim_dev, struct devlink *devlink)
 	struct nsim_dev_health *health = &nsim_dev->health;
 	int err;
 
+#ifdef HAVE_DEVLINK_HEALTH_REPORTER_OPS_PERIOD
+	health->empty_reporter =
+		devl_health_reporter_create(devlink,
+					    &nsim_dev_empty_reporter_ops,
+					    health);
+#else
 	health->empty_reporter =
 		devl_health_reporter_create(devlink,
 					    &nsim_dev_empty_reporter_ops,
 					    0, health);
+#endif
 	if (IS_ERR(health->empty_reporter))
 		return PTR_ERR(health->empty_reporter);
 
+#ifdef HAVE_DEVLINK_HEALTH_REPORTER_OPS_PERIOD
+	health->dummy_reporter =
+		devl_health_reporter_create(devlink,
+					    &nsim_dev_dummy_reporter_ops,
+					    health);
+#else
 	health->dummy_reporter =
 		devl_health_reporter_create(devlink,
 					    &nsim_dev_dummy_reporter_ops,
 					    0, health);
+#endif
 	if (IS_ERR(health->dummy_reporter)) {
 		err = PTR_ERR(health->dummy_reporter);
 		goto err_empty_reporter_destroy;

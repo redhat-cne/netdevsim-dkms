@@ -3,8 +3,8 @@
  * Kernel version compatibility layer for netdevsim DKMS package.
  *
  * The DKMS sources originate from Linux 6.9.5.  This header provides
- * shims so the same source tree compiles against both 6.8.x (Ubuntu
- * 22.04) and 6.17.x (Ubuntu 24.04 HWE) kernels.
+ * shims so the same source tree compiles against 6.8.x (Ubuntu 22.04),
+ * 6.17.x (Ubuntu 24.04.4 HWE), and 7.0.x (Ubuntu 24.04.5 HWE) kernels.
  *
  * Each compat block is guarded by LINUX_VERSION_CODE so the module
  * builds cleanly on the native 6.9.x tree as well.
@@ -202,6 +202,17 @@ __dkms_hrtimer_dummy(struct hrtimer *t)
  */
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 17, 0)
   #define UDP_TUNNEL_NIC_INFO_MAY_SLEEP	0
+#endif
+
+/*
+ * ---- devl_health_reporter_create signature --------------------------------
+ *
+ * Commit d2b007374551 ("devlink: Move graceful period parameter to
+ * reporter ops"), merged in v6.18, dropped the graceful_period argument.
+ * The period now lives in ops->default_graceful_period (0 when unset).
+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+  #define HAVE_DEVLINK_HEALTH_REPORTER_OPS_PERIOD	1
 #endif
 
 /*

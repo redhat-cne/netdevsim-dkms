@@ -40,11 +40,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y dkms gcc make ethtool linuxptp \
-            linux-headers-$(uname -r) \
-            linux-modules-extra-$(uname -r) || {
-            echo "::error::Could not install kernel headers/modules for $(uname -r)"
-            exit 1
-          }
+            linux-headers-$(uname -r)
+          # linux-modules-extra is not published for every HWE ABI
+          # (e.g. 7.0 generic); extras live in linux-modules-* instead.
+          if ! sudo apt-get install -y linux-modules-extra-$(uname -r); then
+            echo "linux-modules-extra-$(uname -r) not available — continuing"
+          fi
 
       - name: Install DKMS source tree
         run: |
@@ -250,8 +251,10 @@ jobs:
       - name: Install DKMS dependencies
         run: |
           sudo apt-get install -y dkms gcc make ethtool linuxptp \
-            linux-headers-$(uname -r) \
-            linux-modules-extra-$(uname -r)
+            linux-headers-$(uname -r)
+          if ! sudo apt-get install -y linux-modules-extra-$(uname -r); then
+            echo "linux-modules-extra-$(uname -r) not available — continuing"
+          fi
 
       - name: Build and install DKMS modules
         run: |

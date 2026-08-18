@@ -206,6 +206,7 @@ EOF
 
 HWE_PACKAGES=""
 if [[ "$UBUNTU_RELEASE" == "24.04" ]]; then
+    # linux-generic-hwe-24.04 tracks the current Noble HWE kernel (7.0 as of 24.04.5).
     HWE_PACKAGES="
   - linux-generic-hwe-24.04
   - linux-headers-generic-hwe-24.04"
@@ -591,7 +592,12 @@ log "Ensuring kernel headers and extra modules are installed ..."
 vm_ssh sudo bash -c "'
 set -euo pipefail
 apt-get update -qq
-apt-get install -y -qq linux-headers-\$(uname -r) linux-modules-extra-\$(uname -r) dkms gcc make 2>&1 | tail -5
+apt-get install -y -qq linux-headers-\$(uname -r) dkms gcc make 2>&1 | tail -5
+# linux-modules-extra-\$(uname -r) is not published for every HWE ABI
+# (e.g. 7.0 generic); extras live in linux-modules-* instead.
+if ! apt-get install -y -qq linux-modules-extra-\$(uname -r) 2>/dev/null; then
+  echo \"  linux-modules-extra-\$(uname -r) not available — continuing\"
+fi
 echo \"Headers dir: /lib/modules/\$(uname -r)/build\"
 ls /lib/modules/\$(uname -r)/build/Makefile >/dev/null 2>&1 && echo \"  OK\" || echo \"  MISSING\"
 '"

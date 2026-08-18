@@ -69,6 +69,8 @@
 /* ---- DPLL netlink (dpll_netlink.c) ------------------------------------- */
 #define dpll_device_change_ntf		nsim_dpll_device_change_ntf
 #define dpll_pin_change_ntf		nsim_dpll_pin_change_ntf
+#define __dpll_device_change_ntf	nsim_dpll_device_change_ntf_internal
+#define __dpll_pin_change_ntf		nsim_dpll_pin_change_ntf_internal
 
 /* ---- DPLL internal (dpll_core.h / dpll_*.c) ---------------------------- */
 #define dpll_nl_family			nsim_dpll_nl_family

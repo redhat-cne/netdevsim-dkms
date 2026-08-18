@@ -137,7 +137,7 @@ renaming happens at the preprocessor level.
 ## Kernel Version Compatibility Layer
 
 `include/dkms_compat.h` provides shims so the 6.9.5 source compiles on
-kernels from **6.8** (Ubuntu 22.04) through **6.17** (Ubuntu 24.04 HWE):
+kernels from **6.8** (Ubuntu 22.04) through **7.0** (Ubuntu 24.04.5 HWE):
 
 | Shim | Kernel boundary | What changed |
 |------|----------------|--------------|
@@ -154,7 +154,9 @@ kernels from **6.8** (Ubuntu 22.04) through **6.17** (Ubuntu 24.04 HWE):
 | `HAVE_DEBUGFS_GET_AUX` | >= 6.16 | `debugfs_real_fops` removed, new aux API |
 | `HAVE_XFRMDEV_OPS_DEV_PARAM` | >= 6.16 | xfrm callbacks gained `net_device *` param |
 | `UDP_TUNNEL_NIC_INFO_MAY_SLEEP` | >= 6.17 → stub 0 | Flag removed from tunnel infrastructure |
+| `HAVE_DEVLINK_HEALTH_REPORTER_OPS_PERIOD` | >= 6.18 | `devl_health_reporter_create` dropped graceful_period |
 | `NSIM_ETHTOOL_TS_INFO` | >= 6.11 | `ethtool_ts_info` → `kernel_ethtool_ts_info` |
+| vendored `include/linux/dpll.h` | >= 7.0 | Host DPLL kAPI added `dpll_tracker *`; keep 6.9.5 get/put |
 
 Each block is guarded by `LINUX_VERSION_CODE` so the code compiles
 cleanly on the native 6.9.x tree as well (no shims active).
@@ -221,9 +223,10 @@ Format: `<id> <pci_addr> <logical_clk_id> [num_ports]`
 netdevsim-dkms/
 ├── .github/workflows/ci.yml    # GitHub Actions CI
 ├── include/
-│   ├── dkms_compat.h           # Kernel version shims (6.8 → 6.17)
+│   ├── dkms_compat.h           # Kernel version shims (6.8 → 7.0)
 │   ├── nsim_rename.h           # nsim_ symbol prefix macros
 │   └── linux/
+│       ├── dpll.h              # 6.9.5 DPLL kAPI on >= 7.0; include_next otherwise
 │       ├── ptp_clock_kernel.h  # PTP kernel API header
 │       └── ptp_mock.h          # Mock PHC API header
 ├── ptp/                        # nsim_ptp.ko + nsim_ptp_mock.ko
@@ -337,5 +340,6 @@ cloud credentials needed).
 | Ubuntu | Kernel | Status |
 |--------|--------|--------|
 | 22.04 (HWE) | 6.8.x | Tested in CI |
-| 24.04 (HWE) | 6.17.x | Tested in CI |
+| 24.04.4 (HWE) | 6.17.x | Dual-compat layer |
+| 24.04.5 (HWE) | 7.0.x | Tested in CI (ubuntu-24.04) |
 | 6.9.x (native) | 6.9.x | Source origin — no shims needed |
