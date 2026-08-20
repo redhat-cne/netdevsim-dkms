@@ -21,9 +21,16 @@ Based on Linux 6.9.5 kernel sources.
 
 ## Kernel Compatibility
 
-This package targets **Linux 6.9.x** kernels. Internal kernel APIs (devlink,
-dpll, netdevice, PTP) may differ in other kernel versions. Building against a
-substantially different kernel version will likely require source modifications.
+This package is based on **Linux 6.9.5** sources. `include/dkms_compat.h`
+shims the same tree onto nearby kernels:
+
+| Ubuntu | Kernel |
+|--------|--------|
+| 22.04 HWE | 6.8.x |
+| 24.04.4 HWE | 6.17.x |
+| 24.04.5 HWE | 7.0.x |
+
+Building against a kernel outside this range will likely need more shims.
 
 ## Prerequisites
 
@@ -273,7 +280,7 @@ you to remove it or pick a different `--vm-name`.
 # Ubuntu 22.04 (kernel 6.8 HWE) — smoke tests only
 ./scripts/test-utm-ubuntu.sh --release 22.04 --skip-ptp-operator --shell
 
-# Ubuntu 24.04 (kernel 6.17 HWE) — smoke tests only
+# Ubuntu 24.04 (kernel 7.0 HWE) — smoke tests only
 ./scripts/test-utm-ubuntu.sh --release 24.04 --skip-ptp-operator --shell
 ```
 
