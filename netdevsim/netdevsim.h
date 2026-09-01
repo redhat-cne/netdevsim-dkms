@@ -90,15 +90,23 @@ struct nsim_dpll {
 	struct dpll_device *eec_dpll;
 	struct dpll_pin *gnss_pin;
 	struct nsim_dpll_pin gnss_pin_priv;
+	struct dpll_pin *ext_pins[4];
+	struct nsim_dpll_pin ext_pin_privs[4];
+	int num_ext_pins;
 	struct list_head port_pins;
 	u64 clock_id;
 	struct gnss_device *gnss_dev;
 	struct hrtimer ubx_timer;
 	struct hrtimer ntf_timer;
+	struct hrtimer holdover_timer;
 	struct work_struct ntf_work;
 	spinlock_t gnss_lock;
 	bool ubx_nav_enabled;
+	bool signal_blocked;
 	u8 gnss_gps_fix;
+	enum dpll_lock_status lock_status;
+	struct kobject *sysfs_kobj;
+	struct kobj_attribute lock_status_attr;
 };
 
 struct nsim_ethtool_pauseparam {
@@ -123,6 +131,7 @@ struct netdevsim {
 	struct nsim_dev *nsim_dev;
 	struct nsim_dev_port *nsim_dev_port;
 	struct mock_phc *phc;
+	struct kobject *ptp_compat_kobj; /* /sys/.../pci_dev/ptp/ for compat */
 	int logical_clk_id;  /* Logical clock ID for PHC sharing (-1 = unique) */
 
 	u64 tx_packets;

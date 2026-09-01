@@ -16,28 +16,33 @@ struct device;
 struct mock_phc {
 	struct ptp_clock_info info;
 	struct ptp_clock *clock;
-	struct timecounter tc;
-	struct cyclecounter cc;
 	int logical_clk_id;
 	struct kref ref;
 	spinlock_t lock;
+	/* MONOTONIC-based timekeeping (immune to phc2sys stepping REALTIME/TAI) */
+	s64 offset_ns;		/* PHC = CLOCK_MONOTONIC + offset_ns */
+	s64 freq_ppb;		/* rate correction from adjfine */
+	u64 last_mono_ns;	/* CLOCK_MONOTONIC snapshot at last update */
 	/*
-	 * Two pins: index 0 unused, index 1 "GNSS1PPS" — matches common NIC
-	 * layouts and ts2phc defaults (e.g. ts2phc.pin_index 1 on ens1f0).
+	 * E810-style pin layout: GNSS-1PPS input + 4 external connectors.
+	 * Pin index 0 = GNSS-1PPS (ts2phc default), followed by SMA1, SMA2,
+	 * U.FL1, U.FL2 so the dashboard SMA probe discovers them.
 	 */
-	struct ptp_pin_desc pins[2];
+	struct ptp_pin_desc pins[5];
 	/* EXTTS (1PPS) simulation */
 	struct hrtimer extts_timer;
 	bool extts_enabled;
 	int extts_channel;
+	u64 last_extts_sec;	/* dedup: last CLOCK_TAI second we reported */
 };
 
 #if IS_ENABLED(CONFIG_PTP_1588_CLOCK_MOCK)
 
 struct mock_phc *mock_phc_create(struct device *dev, int logical_clk_id);
 int mock_phc_index(struct mock_phc *phc);
-int mock_phc_logical_clk_id(struct mock_phc *phc);	
+int mock_phc_logical_clk_id(struct mock_phc *phc);
 void mock_phc_release(struct mock_phc *phc);
+struct kobject *mock_phc_dev_kobj(struct mock_phc *phc);
 
 struct ptp_clock_info *mock_phc_get_ptp_info(struct mock_phc *phc);
 #else

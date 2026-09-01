@@ -14,7 +14,15 @@
 # is not in the default cgroup device allowlist; containers and
 # systemd-sandboxed services (DevicePolicy=closed) would get
 # "Operation not permitted" without world-readable permissions.
+#
+# The bind-mount of /sys/class/nsim_ptp over /sys/class/ptp makes
+# PTP sysfs entries (pins, clock_name, etc.) visible at the standard
+# path expected by monitoring tools and the PTP dashboard.
 SUBSYSTEM=="nsim_ptp", KERNEL=="nsim_ptp[0-9]*", MODE="0666", \
-    RUN+="/bin/sh -c 'rm -f /dev/ptp%n; mknod /dev/ptp%n c %M %m; chmod 666 /dev/ptp%n'"
+    RUN+="/bin/sh -c 'rm -f /dev/ptp%n; mknod /dev/ptp%n c %M %m; chmod 666 /dev/ptp%n; if [ -d /sys/class/ptp ] && ! mountpoint -q /sys/class/ptp; then mount --bind /sys/class/nsim_ptp /sys/class/ptp 2>/dev/null || true; fi'"
 SUBSYSTEM=="nsim_ptp", KERNEL=="nsim_ptp[0-9]*", ACTION=="remove", \
     RUN+="/bin/rm -f /dev/ptp%n"
+
+# gpsd drops privileges to nobody; without world access it fails with
+# EACCES, frees the device, and ts2phc starves for NMEA.
+SUBSYSTEM=="gnss", KERNEL=="gnss[0-9]*", MODE="0666"

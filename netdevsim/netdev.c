@@ -27,6 +27,7 @@
 #include <net/rtnetlink.h>
 #include <net/udp_tunnel.h>
 #include <linux/skbuff.h>
+#include <net/dst.h>
 #include "netdevsim.h"
 #include <linux/device.h>
 
@@ -66,7 +67,25 @@ static netdev_tx_t nsim_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	if (ptp_info)
 		ptp_info->gettime64(ptp_info, &rx_ts);
 	skb_hwtstamps(skb)->hwtstamp = timespec64_to_ktime(rx_ts);
-	if (unlikely(dev_forward_skb(peer_ns->netdev, skb) == NET_RX_DROP))
+
+	/*
+	 * Inject into peer's RX path without dev_forward_skb which scrubs
+	 * skb_shared_info hwtstamps during cross-netns forwarding (kernel 6.11+).
+	 * We replicate the necessary parts of __dev_forward_skb manually.
+	 */
+	if (skb_orphan_frags(skb, GFP_ATOMIC) ||
+	    unlikely(!is_skb_forwardable(peer_ns->netdev, skb))) {
+		kfree_skb(skb);
+		goto out_drop_cnt;
+	}
+	skb_orphan(skb);
+	skb->pkt_type = PACKET_HOST;
+	skb->protocol = eth_type_trans(skb, peer_ns->netdev);
+	skb->skb_iif = 0;
+	skb_dst_drop(skb);
+	skb->mark = 0;
+	nf_reset_ct(skb);
+	if (unlikely(netif_rx(skb) == NET_RX_DROP))
 		goto out_drop_cnt;
 	/* only timestamp the outbound packet if the user has requested it */
 	if (gen_tx_tstamp) {
@@ -90,6 +109,18 @@ out_drop_cnt:
 	ns->tx_dropped++;
 	u64_stats_update_end(&ns->syncp);
 	return NETDEV_TX_OK;
+}
+
+static int nsim_open(struct net_device *dev)
+{
+	netif_carrier_on(dev);
+	return 0;
+}
+
+static int nsim_stop(struct net_device *dev)
+{
+	netif_carrier_off(dev);
+	return 0;
 }
 
 static void nsim_set_rx_mode(struct net_device *dev)
@@ -401,6 +432,8 @@ static int nsim_set_ts_config(struct net_device *netdev,
 	return 0;
 }
 static const struct net_device_ops nsim_netdev_ops = {
+	.ndo_open = nsim_open,
+	.ndo_stop = nsim_stop,
 	.ndo_start_xmit = nsim_start_xmit,
 	.ndo_set_rx_mode = nsim_set_rx_mode,
 	.ndo_set_mac_address = eth_mac_addr,
@@ -424,6 +457,8 @@ static const struct net_device_ops nsim_netdev_ops = {
 };
 
 static const struct net_device_ops nsim_vf_netdev_ops = {
+	.ndo_open = nsim_open,
+	.ndo_stop = nsim_stop,
 	.ndo_start_xmit = nsim_start_xmit,
 	.ndo_set_rx_mode = nsim_set_rx_mode,
 	.ndo_set_mac_address = eth_mac_addr,
@@ -440,7 +475,6 @@ static void nsim_setup(struct net_device *dev)
 	eth_hw_addr_random(dev);
 
 	dev->tx_queue_len = 0;
-	dev->flags &= ~IFF_MULTICAST;
 	dev->priv_flags |= IFF_LIVE_ADDR_CHANGE | IFF_NO_QUEUE;
 	dev->features |= NETIF_F_HIGHDMA | NETIF_F_SG | NETIF_F_FRAGLIST |
 			 NETIF_F_HW_CSUM | NETIF_F_TSO;
@@ -540,7 +574,27 @@ static int nsim_init_netdevsim(struct netdevsim *ns)
 	err = register_netdevice(ns->netdev);
 	if (err)
 		goto err_ipsec_teardown;
+	netif_carrier_on(ns->netdev);
 	rtnl_unlock();
+
+	/*
+	 * Create /sys/devices/.../pci_dev/ptp/ptpN symlink so tools that
+	 * walk /sys/class/net/<iface>/device/ptp/ find our PTP clock.
+	 */
+	if (ns->nsim_dev->fake_pci_dev) {
+		struct kobject *pci_kobj = &ns->nsim_dev->fake_pci_dev->dev.kobj;
+		struct kobject *ptp_dir = kobject_create_and_add("ptp", pci_kobj);
+		if (ptp_dir) {
+			char link_name[16];
+			snprintf(link_name, sizeof(link_name), "ptp%d",
+				 mock_phc_index(phc));
+			(void)sysfs_create_link(ptp_dir,
+					       mock_phc_dev_kobj(phc),
+					       link_name);
+			ns->ptp_compat_kobj = ptp_dir;
+		}
+	}
+
 	return 0;
 
 err_ipsec_teardown:
@@ -563,12 +617,18 @@ static int nsim_init_netdevsim_vf(struct netdevsim *ns)
 	ns->netdev->netdev_ops = &nsim_vf_netdev_ops;
 	rtnl_lock();
 	err = register_netdevice(ns->netdev);
+	if (!err)
+		netif_carrier_on(ns->netdev);
 	rtnl_unlock();
 	return err;
 }
 
 static void nsim_exit_netdevsim(struct netdevsim *ns)
 {
+	if (ns->ptp_compat_kobj) {
+		kobject_put(ns->ptp_compat_kobj);
+		ns->ptp_compat_kobj = NULL;
+	}
 	nsim_udp_tunnels_info_destroy(ns->netdev);
 	mock_phc_release(ns->phc);
 }
