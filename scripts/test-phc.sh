@@ -9,6 +9,7 @@
 #   - adjtime (time step)
 #   - adjfine (frequency adjustment via scaled_ppm)
 #   - EXTTS enable, event delivery, second-boundary alignment
+#   - Configurable per-PHC EXTTS delivery delay
 #   - EXTTS self-correction after PHC time step
 #   - PHC sharing across ports (same logical_clk_id)
 #   - Pin configuration (2 pins: NONE, GNSS1PPS)
@@ -721,9 +722,43 @@ fi
 echo
 
 # -------------------------------------------------------------------
-# 10. EXTTS self-correction after PHC time step
+# 10. Configurable EXTTS delivery delay
 # -------------------------------------------------------------------
-log "10. EXTTS self-correction after time step"
+log "10. Configurable EXTTS delivery delay"
+
+EXTTS_DELAY_ATTR="/sys/class/nsim_ptp/${PTP_CLASS_DEV}/extts_delay_ms"
+if [[ -w "$EXTTS_DELAY_ATTR" ]]; then
+    # A 400 ms delay exceeds linuxptp ts2phc's 333 ms polling window.
+    echo 400 > "$EXTTS_DELAY_ATTR"
+    assert_eq "EXTTS delay sysfs readback" "400" "$(cat "$EXTTS_DELAY_ATTR")"
+
+    phc_cmd settime "$PTP_DEV" 1700000000 0 >/dev/null
+    phc_cmd adjfine "$PTP_DEV" 0 >/dev/null
+    phc_cmd enable_extts "$PTP_DEV" 0 >/dev/null
+    EVENTS=$(phc_cmd read_extts "$PTP_DEV" 5.0)
+    phc_cmd disable_extts "$PTP_DEV" 0 >/dev/null
+    echo 0 > "$EXTTS_DELAY_ATTR"
+
+    DELAY_OK=$(echo "$EVENTS" | python3 -c "
+import sys, json
+values = [e['nsec'] for e in json.load(sys.stdin)]
+print('ok' if len(values) >= 2 and all(390000000 <= n <= 410000000 for n in values) else 'bad:' + repr(values))
+")
+    if [[ "$DELAY_OK" == "ok" ]]; then
+        pass "EXTTS event timestamps reflect configured 400 ms delay"
+    else
+        fail "EXTTS delay was not applied as expected ($DELAY_OK)"
+    fi
+else
+    skip "EXTTS delay sysfs attribute unavailable: $EXTTS_DELAY_ATTR"
+fi
+
+echo
+
+# -------------------------------------------------------------------
+# 11. EXTTS self-correction after PHC time step
+# -------------------------------------------------------------------
+log "11. EXTTS self-correction after time step"
 
 phc_cmd settime "$PTP_DEV" 1700000000 0 >/dev/null
 phc_cmd adjfine "$PTP_DEV" 0 >/dev/null
@@ -773,9 +808,9 @@ phc_cmd disable_extts "$PTP_DEV" 0 >/dev/null
 echo
 
 # -------------------------------------------------------------------
-# 11. EXTTS with frequency adjustment
+# 12. EXTTS with frequency adjustment
 # -------------------------------------------------------------------
-log "11. EXTTS with frequency adjustment"
+log "12. EXTTS with frequency adjustment"
 
 phc_cmd settime "$PTP_DEV" 1700000000 0 >/dev/null
 phc_cmd adjfine "$PTP_DEV" 6553600 >/dev/null  # +100 ppm
@@ -813,9 +848,9 @@ fi
 echo
 
 # -------------------------------------------------------------------
-# 12. PHC sharing (same logical_clk_id)
+# 13. PHC sharing (same logical_clk_id)
 # -------------------------------------------------------------------
-log "12. PHC sharing across ports (same logical_clk_id)"
+log "13. PHC sharing across ports (same logical_clk_id)"
 
 cleanup_all_devices
 create_device 1 1 2 1 1  # 2 ports, clock_id=1
@@ -846,9 +881,9 @@ fi
 echo
 
 # -------------------------------------------------------------------
-# 13. Multiple settime64 operations
+# 14. Multiple settime64 operations
 # -------------------------------------------------------------------
-log "13. Multiple settime64 operations (no corruption)"
+log "14. Multiple settime64 operations (no corruption)"
 
 cleanup_all_devices
 create_device 1 1 2 1 1
@@ -879,9 +914,9 @@ fi
 echo
 
 # -------------------------------------------------------------------
-# 14. REGRESSION: EXTTS with realistic TAI time (large offset_ns)
+# 15. REGRESSION: EXTTS with realistic TAI time (large offset_ns)
 # -------------------------------------------------------------------
-log "14. REGRESSION: EXTTS with realistic TAI time (offset_ns ≈ 56 years)"
+log "15. REGRESSION: EXTTS with realistic TAI time (offset_ns ≈ 56 years)"
 
 # Bug: with CLOCK_MONOTONIC_RAW base, setting PHC to TAI time created
 # offset_ns ≈ 1.78e18.  ts2phc's servo drove freq_ppb to -500M, causing
@@ -962,9 +997,9 @@ fi
 echo
 
 # -------------------------------------------------------------------
-# 15. REGRESSION: EXTTS must not rapid-fire with extreme freq_ppb
+# 16. REGRESSION: EXTTS must not rapid-fire with extreme freq_ppb
 # -------------------------------------------------------------------
-log "15. REGRESSION: EXTTS with extreme freq_ppb = -500M"
+log "16. REGRESSION: EXTTS with extreme freq_ppb = -500M"
 
 # Bug: when freq_ppb = -500000000 (max negative), PHC advances at 50%
 # speed.  With CLOCK_MONOTONIC_RAW the EXTTS delay was doubled, but the
@@ -1023,9 +1058,9 @@ fi
 echo
 
 # -------------------------------------------------------------------
-# 16. REGRESSION: freq_ppb stays small after realistic settime
+# 17. REGRESSION: freq_ppb stays small after realistic settime
 # -------------------------------------------------------------------
-log "16. REGRESSION: freq_ppb stays near zero with MONOTONIC base"
+log "17. REGRESSION: freq_ppb stays near zero with MONOTONIC base"
 
 # Bug: with CLOCK_MONOTONIC_RAW, after settime to TAI, the PHC drifted
 # and ts2phc pushed freq_ppb to -500M.  With CLOCK_MONOTONIC base, the
@@ -1076,9 +1111,9 @@ fi
 echo
 
 # -------------------------------------------------------------------
-# 17. dmesg sanity
+# 18. dmesg sanity
 # -------------------------------------------------------------------
-log "17. dmesg sanity check"
+log "18. dmesg sanity check"
 
 DMESG_PHC=$(dmesg | grep -i "ptp_mock\|mock_phc\|nsim_ptp" | tail -20 || true)
 if echo "$DMESG_PHC" | grep -qiE "bug|oops|panic|call.trace|rcu.*stall"; then
@@ -1091,9 +1126,9 @@ fi
 echo
 
 # -------------------------------------------------------------------
-# 18. Cleanup
+# 19. Cleanup
 # -------------------------------------------------------------------
-log "18. Cleanup"
+log "19. Cleanup"
 
 cleanup_all_devices
 pass "all devices cleaned up"

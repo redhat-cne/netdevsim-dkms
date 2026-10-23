@@ -11,6 +11,7 @@
 #include <linux/ptp_clock_kernel.h>
 #include <linux/kref.h>
 #include <linux/hrtimer.h>
+#include <linux/sysfs.h>
 
 struct device;
 struct mock_phc {
@@ -34,6 +35,8 @@ struct mock_phc {
 	bool extts_enabled;
 	int extts_channel;
 	u64 last_extts_sec;	/* dedup: last CLOCK_TAI second we reported */
+	unsigned int extts_delay_ms;	/* delivery delay after each TAI second boundary */
+	struct kobj_attribute extts_delay_attr;
 };
 
 #if IS_ENABLED(CONFIG_PTP_1588_CLOCK_MOCK)

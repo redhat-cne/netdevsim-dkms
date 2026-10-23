@@ -118,8 +118,8 @@ static int mock_phc_gettime64(struct ptp_clock_info *info,
 }
 
 /*
- * Simulate a GNSS 1PPS input: one EXTTS edge per CLOCK_TAI second, with
- * the event timestamp equal to the PHC reading at that edge.
+ * Simulate a GNSS 1PPS input: one EXTTS event per CLOCK_TAI second, optionally
+ * delayed by extts_delay_ms, with a timestamp captured at the delayed edge.
  *
  * Why TAI (not PHC) second boundaries?
  *   ts2phc pairs EXTTS with NMEA, which is UTC converted to TAI via the
@@ -129,15 +129,17 @@ static int mock_phc_gettime64(struct ptp_clock_info *info,
  *   (offset 0 ↔ -1e9), which flapped T-GM clock class 6↔248 and broke
  *   downstream OC lock.
  *
- * Why report the PHC reading corrected back to the TAI edge?
- *   A polled hrtimer can run up to ~1 ms after the boundary.  Stamping
- *   the live PHC then injects that latency into every sample (typically
+ * Why correct the timestamp to the configured edge?
+ *   A polled hrtimer can run up to ~1 ms after the edge. Stamping the
+ *   live PHC then injects that latency into every sample (typically
  *   several µs–ms of jitter), which exceeds ts2phc's lock threshold
- *   (1500 ns).  Subtracting the observed TAI lateness approximates the
- *   PHC capture at the true edge (valid while |freq_ppb| is modest).
+ *   (1500 ns). Subtract timer lateness beyond the configured delay so
+ *   the timestamp approximates the PHC capture at the delayed edge
+ *   (valid while |freq_ppb| is modest).
  */
 #define EXTTS_IDLE_POLL_NS	(NSEC_PER_SEC / 10)	/* 100 ms while disabled */
 #define EXTTS_EDGE_SLACK_NS	(NSEC_PER_MSEC)		/* wake 1 ms after edge */
+#define EXTTS_MAX_DELAY_MS	900			/* keep events within the TAI second */
 
 static enum hrtimer_restart mock_phc_extts_timer(struct hrtimer *timer)
 {
@@ -145,6 +147,7 @@ static enum hrtimer_restart mock_phc_extts_timer(struct hrtimer *timer)
 	struct ptp_clock_event event;
 	unsigned long flags;
 	u64 tai_ns, tai_sec, phc_ns, late_ns, next_delta_ns;
+	u64 delay_ns = (u64)READ_ONCE(phc->extts_delay_ms) * NSEC_PER_MSEC;
 
 	if (!READ_ONCE(phc->extts_enabled)) {
 		hrtimer_forward_now(timer, ns_to_ktime(EXTTS_IDLE_POLL_NS));
@@ -156,20 +159,29 @@ static enum hrtimer_restart mock_phc_extts_timer(struct hrtimer *timer)
 	late_ns = tai_ns - tai_sec * NSEC_PER_SEC;
 
 	if (tai_sec != phc->last_extts_sec) {
+		/* Wait until the configured phase delay has elapsed after the edge. */
+		if (late_ns < delay_ns) {
+			hrtimer_forward_now(timer,
+					    ns_to_ktime(delay_ns - late_ns));
+			return HRTIMER_RESTART;
+		}
+
 		phc->last_extts_sec = tai_sec;
 
 		spin_lock_irqsave(&phc->lock, flags);
 		phc_ns = mock_phc_read_locked(phc);
 		spin_unlock_irqrestore(&phc->lock, flags);
 
-		event.timestamp = phc_ns - late_ns;
+		/* Timestamp the delayed edge, removing only timer scheduling jitter. */
+		event.timestamp = phc_ns - (late_ns - delay_ns);
 		event.type = PTP_CLOCK_EXTTS;
 		event.index = phc->extts_channel;
 		ptp_clock_event(phc->clock, &event);
 	}
 
-	/* Aim for ~1 ms after the next TAI second (MONOTONIC ≈ TAI rate). */
-	next_delta_ns = (NSEC_PER_SEC - late_ns) + EXTTS_EDGE_SLACK_NS;
+	/* Aim for the configured delay after the next TAI second. */
+	next_delta_ns = (NSEC_PER_SEC - late_ns) + delay_ns +
+			EXTTS_EDGE_SLACK_NS;
 	if (next_delta_ns < EXTTS_EDGE_SLACK_NS)
 		next_delta_ns = EXTTS_EDGE_SLACK_NS;
 	hrtimer_forward_now(timer, ns_to_ktime(next_delta_ns));
@@ -222,6 +234,40 @@ static int mock_phc_enable(struct ptp_clock_info *info,
 	default:
 		return -EOPNOTSUPP;
 	}
+}
+
+static ssize_t extts_delay_ms_show(struct kobject *kobj,
+				   struct kobj_attribute *attr, char *buf)
+{
+	struct mock_phc *phc = container_of(attr, struct mock_phc,
+					    extts_delay_attr);
+
+	return sysfs_emit(buf, "%u\n", READ_ONCE(phc->extts_delay_ms));
+}
+
+static ssize_t extts_delay_ms_store(struct kobject *kobj,
+				    struct kobj_attribute *attr,
+				    const char *buf, size_t count)
+{
+	struct mock_phc *phc = container_of(attr, struct mock_phc,
+					    extts_delay_attr);
+	unsigned int delay_ms;
+	int err;
+
+	err = kstrtouint(buf, 0, &delay_ms);
+	if (err)
+		return err;
+	if (delay_ms > EXTTS_MAX_DELAY_MS)
+		return -ERANGE;
+
+	WRITE_ONCE(phc->extts_delay_ms, delay_ms);
+	/* Re-evaluate promptly, especially when lowering an active delay. */
+	if (READ_ONCE(phc->extts_enabled))
+		hrtimer_start(&phc->extts_timer,
+			      ns_to_ktime(EXTTS_EDGE_SLACK_NS),
+			      HRTIMER_MODE_REL);
+
+	return count;
 }
 
 int mock_phc_index(struct mock_phc *phc)
@@ -306,14 +352,25 @@ struct mock_phc *mock_phc_create(struct device *dev, int logical_clk_id)
 	phc->freq_ppb = 0;
 
 	phc->clock = ptp_clock_register(&phc->info, dev);
-	if (!IS_ERR(phc->clock))
-		hrtimer_start(&phc->extts_timer, ns_to_ktime(EXTTS_IDLE_POLL_NS),
-			      HRTIMER_MODE_REL);
 	if (IS_ERR(phc->clock)) {
 		err = PTR_ERR(phc->clock);
 		goto out_free_phc;
 	}
 
+	sysfs_attr_init(&phc->extts_delay_attr.attr);
+	phc->extts_delay_attr.attr.name = "extts_delay_ms";
+	phc->extts_delay_attr.attr.mode = 0644;
+	phc->extts_delay_attr.show = extts_delay_ms_show;
+	phc->extts_delay_attr.store = extts_delay_ms_store;
+	err = sysfs_create_file(mock_phc_dev_kobj(phc),
+				&phc->extts_delay_attr.attr);
+	if (err) {
+		ptp_clock_unregister(phc->clock);
+		goto out_free_phc;
+	}
+
+	hrtimer_start(&phc->extts_timer, ns_to_ktime(EXTTS_IDLE_POLL_NS),
+		      HRTIMER_MODE_REL);
 	return phc;
 
 out_free_phc:
@@ -327,6 +384,8 @@ static void mock_phc_destroy(struct kref *ref)
 {
 	struct mock_phc *phc = container_of(ref, struct mock_phc, ref);
 
+	sysfs_remove_file(mock_phc_dev_kobj(phc),
+			  &phc->extts_delay_attr.attr);
 	hrtimer_cancel(&phc->extts_timer);
 	ptp_clock_unregister(phc->clock);
 	kfree(phc);

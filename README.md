@@ -120,6 +120,19 @@ echo "3:${IF0_IDX} 3:${IF1_IDX}" > /sys/bus/netdevsim/link_device
 exec 3<&-
 ```
 
+The mock PHC exposes a per-device `extts_delay_ms` sysfs attribute under
+`/sys/class/nsim_ptp/nsim_ptpN/`. It delays EXTTS/PPS event delivery after each
+`CLOCK_TAI` second boundary while keeping the event timestamp aligned to the
+configured delayed edge. The default is `0`; values from `0` to `900` ms are
+accepted. For example, a 400 ms delay exceeds linuxptp ts2phc's 333 ms poll
+window:
+
+```bash
+echo 400 | sudo tee /sys/class/nsim_ptp/nsim_ptp0/extts_delay_ms
+# Restore normal PPS timing
+echo 0 | sudo tee /sys/class/nsim_ptp/nsim_ptp0/extts_delay_ms
+```
+
 ## Container / Kubernetes Notes
 
 When using netdevsim inside containers or Kubernetes pods:
