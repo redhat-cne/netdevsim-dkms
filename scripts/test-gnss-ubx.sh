@@ -76,7 +76,7 @@ import sys, os, struct, time, select, json
 S1, S2 = 0xB5, 0x62
 CLS_NAV, CLS_ACK, CLS_CFG, CLS_MON = 0x01, 0x05, 0x06, 0x0A
 NAV_STATUS, NAV_CLOCK, ACK_ACK = 0x03, 0x22, 0x01
-CFG_MSG, CFG_VALSET, MON_VER = 0x01, 0x8A, 0x04
+CFG_MSG, CFG_CFG, CFG_VALSET, MON_VER, MON_HW = 0x01, 0x09, 0x8A, 0x04, 0x09
 KEY_NCNOTHRS = 0x201100aa
 
 def ck(data):
@@ -130,11 +130,31 @@ def rd(dev, tmo=2.5):
         return r
     finally: os.close(fd)
 
+def drain_all(fd):
+    # Discard every buffered frame so the next read only observes state
+    # produced after this point (the periodic NAV emitter runs continuously).
+    while True:
+        try:
+            if not os.read(fd, 65536):
+                return
+        except BlockingIOError:
+            return
+
 def main():
     cmd, dev = sys.argv[1], sys.argv[2] if len(sys.argv)>2 else None
 
     if cmd == "mon_ver":
         r = wr(dev, build(CLS_MON, MON_VER))
+        fs = parse(r)
+        print(json.dumps(fs))
+
+    elif cmd == "mon_hw":
+        r = wr(dev, build(CLS_MON, MON_HW))
+        fs = parse(r)
+        print(json.dumps(fs))
+
+    elif cmd == "cfg_cfg_save":
+        r = wr(dev, build(CLS_CFG, CFG_CFG, b"\x00" * 13))
         fs = parse(r)
         print(json.dumps(fs))
 
@@ -170,9 +190,8 @@ def main():
             f1 = build(CLS_CFG, CFG_MSG, bytes([CLS_NAV, NAV_STATUS, 1]))
             os.write(fd, f1)
             time.sleep(0.1)
-            # Drain ACK
-            try: os.read(fd, 4096)
-            except BlockingIOError: pass
+            # Drain buffered frames (ACKs and older NAV samples)
+            drain_all(fd)
             # Now wait for NAV-STATUS
             dl = time.monotonic() + 4.0
             buf = b""
@@ -199,8 +218,7 @@ def main():
             f2 = build(CLS_CFG, CFG_MSG, bytes([CLS_NAV, NAV_CLOCK, 1]))
             os.write(fd, f1+f2)
             time.sleep(0.2)
-            try: os.read(fd, 4096)  # drain ACKs
-            except BlockingIOError: pass
+            drain_all(fd)
             dl = time.monotonic() + 3.0
             buf = b""
             while time.monotonic() < dl:
@@ -288,7 +306,7 @@ if [[ "$NO_LOAD" == false ]]; then
     modprobe nsim_dpll && pass "nsim_dpll" || fail "nsim_dpll"
     modprobe netdevsim pci_bus_nr=0x1f && pass "netdevsim" || fail "netdevsim"
 else
-    lsmod | grep -q netdevsim && pass "netdevsim loaded" || fail "netdevsim"
+    lsmod | grep netdevsim >/dev/null && pass "netdevsim loaded" || fail "netdevsim"
 fi
 echo
 
@@ -322,12 +340,38 @@ for f in json.load(sys.stdin):
 else skip "no GNSS"; fi
 echo
 
+# --- 3a. UBX MON-HW ---
+log "3a. UBX MON-HW poll response"
+if [[ -n "$GNSS_DEV" ]]; then
+    R=$(ubx mon_hw "$GNSS_DEV")
+    C=$(echo "$R" | python3 -c "import sys,json;print(sum(1 for f in json.load(sys.stdin) if f['class']==0x0A and f['id']==0x09))")
+    (( C>=1 )) && pass "MON-HW response ($C)" || fail "no MON-HW response"
+    if (( C>=1 )); then
+        L=$(echo "$R" | python3 -c "
+import sys,json
+for f in json.load(sys.stdin):
+ if f['class']==0x0A and f['id']==0x09:
+  print(len(bytes.fromhex(f['payload']))); break")
+        assert_eq "MON-HW payload length" "60" "$L"
+    fi
+else skip "no GNSS"; fi
+echo
+
 # --- 4. UBX CFG-MSG NAV enable ---
 log "4. UBX CFG-MSG NAV-STATUS + NAV-CLOCK enable"
 if [[ -n "$GNSS_DEV" ]]; then
     R=$(ubx cfg_msg_nav "$GNSS_DEV")
     A=$(echo "$R" | python3 -c "import sys,json;print(sum(1 for f in json.load(sys.stdin) if f['class']==0x05))")
     (( A>=2 )) && pass "2 ACKs for CFG-MSG" || { (( A>=1 )) && pass "1 ACK for CFG-MSG" || fail "no ACK"; }
+else skip "no GNSS"; fi
+echo
+
+# --- 4a. UBX CFG-CFG SAVE ACK ---
+log "4a. UBX CFG-CFG SAVE ACK"
+if [[ -n "$GNSS_DEV" ]]; then
+    R=$(ubx cfg_cfg_save "$GNSS_DEV")
+    A=$(echo "$R" | python3 -c "import sys,json;print(sum(1 for f in json.load(sys.stdin) if f['class']==0x05 and f['payload']=='0609'))")
+    (( A>=1 )) && pass "ACK for CFG-CFG ($A)" || fail "no ACK for CFG-CFG"
 else skip "no GNSS"; fi
 echo
 

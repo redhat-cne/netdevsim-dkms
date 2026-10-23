@@ -261,8 +261,10 @@ static ssize_t nsim_dpll_lock_status_store(struct kobject *kobj,
 #define UBX_NAV_CLOCK		0x22
 #define UBX_ACK_ACK		0x01
 #define UBX_CFG_MSG		0x01
+#define UBX_CFG_CFG		0x09
 #define UBX_CFG_VALSET		0x8A
 #define UBX_MON_VER		0x04
+#define UBX_MON_HW		0x09
 
 #define UBX_CFG_VALSET_HDR_LEN	4
 #define UBX_CFGKEY_INFIL_NCNOTHRS 0x201100aa
@@ -270,6 +272,7 @@ static ssize_t nsim_dpll_lock_status_store(struct kobject *kobj,
 #define UBX_NAV_STATUS_LEN	16
 #define UBX_NAV_CLOCK_LEN	20
 #define UBX_ACK_ACK_LEN	2
+#define UBX_MON_HW_LEN		60
 
 #define UBX_MON_VER_SW_LEN	30
 #define UBX_MON_VER_HW_LEN	10
@@ -353,6 +356,21 @@ static int ubx_build_mon_ver(u8 *buf, size_t bufsz)
 
 	return ubx_build_frame(buf, bufsz, UBX_CLASS_MON, UBX_MON_VER,
 			       payload, UBX_MON_VER_PAYLOAD_LEN);
+}
+
+static int ubx_build_mon_hw(u8 *buf, size_t bufsz)
+{
+	u8 payload[UBX_MON_HW_LEN] = {};
+
+	/* ubxtool only needs a well-formed MON-HW poll response during
+	 * linuxptp-daemon's ublox init; report a healthy antenna and pin
+	 * state so initialization is not rejected. */
+	payload[20] = 0x02;	/* aStatus: OK */
+	payload[21] = 0x02;	/* aPower: OK */
+	payload[22] = 0x00;	/* flags: none */
+
+	return ubx_build_frame(buf, bufsz, UBX_CLASS_MON, UBX_MON_HW,
+			       payload, UBX_MON_HW_LEN);
 }
 
 static int ubx_build_ack(u8 *buf, size_t bufsz, u8 acked_cls, u8 acked_id)
@@ -616,6 +634,10 @@ static int nsim_gnss_write_raw(struct gnss_device *gdev,
 			len = ubx_build_mon_ver(resp, sizeof(resp));
 			if (len > 0)
 				nsim_ubx_insert_locked(ndpll, resp, len);
+		} else if (id == UBX_MON_HW) {
+			len = ubx_build_mon_hw(resp, sizeof(resp));
+			if (len > 0)
+				nsim_ubx_insert_locked(ndpll, resp, len);
 		}
 		break;
 	case UBX_CLASS_CFG:
@@ -679,6 +701,11 @@ static int nsim_gnss_write_raw(struct gnss_device *gdev,
 				pos++;
 			}
 
+			len = ubx_build_ack(resp, sizeof(resp), cls, id);
+			if (len > 0)
+				nsim_ubx_insert_locked(ndpll, resp, len);
+		} else if (id == UBX_CFG_CFG) {
+			/* ubxtool -p SAVE sends CFG-CFG and waits for an ACK. */
 			len = ubx_build_ack(resp, sizeof(resp), cls, id);
 			if (len > 0)
 				nsim_ubx_insert_locked(ndpll, resp, len);
