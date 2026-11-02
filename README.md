@@ -100,9 +100,24 @@ symlinks which only exist on the host devtmpfs.
 Create netdevsim devices via the bus interface:
 
 ```bash
-# Format: "id pci_addr clk_id [num_ports]"
-echo "1 0000:1f:02.0 1 2" | sudo tee /sys/bus/netdevsim/new_device
+# Format: "id pci_addr clk_id [num_ports] [queues] [wpc]"
+echo "1 0000:1f:02.0 1 2 1 0" | sudo tee /sys/bus/netdevsim/new_device
 ```
+
+### T-BC topology
+
+A T-BC CUT needs one WPC device with **three ports** on the same PHC: one
+receiver and two transmitters. Create it as a single device so it exposes one
+PHC, one DPLL, and one GNSS device with per-port SyncE pins:
+
+```bash
+echo "201 0001:1f:20.0 77 3 1 1" | sudo tee /sys/bus/netdevsim/new_device
+```
+
+The three resulting netdevs share the same `ptpN` clock and `/sys/.../ptp/ptpN`
+compatibility link. The DPLL pin operations support frequency, direction,
+state, priority, phase-offset reads, and phase-adjust read/write, which is
+enough for E810-style T-BC pin and clock-chain configuration.
 
 The `pci_bus_nr` module parameter controls the fake PCI host bridge bus:
 

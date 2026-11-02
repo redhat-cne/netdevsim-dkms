@@ -1690,6 +1690,10 @@ static void nsim_dev_reload_destroy(struct nsim_dev *nsim_dev)
 
 	nsim_dpll_exit(nsim_dev);
 	nsim_dev_port_del_all(nsim_dev);
+	if (nsim_dev->ptp_compat_kobj) {
+		kobject_put(nsim_dev->ptp_compat_kobj);
+		nsim_dev->ptp_compat_kobj = NULL;
+	}
 	nsim_dev_hwstats_exit(nsim_dev);
 	nsim_dev_psample_exit(nsim_dev);
 	nsim_dev_health_exit(nsim_dev);

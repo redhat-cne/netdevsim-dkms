@@ -82,7 +82,11 @@ struct nsim_dpll_pin {
 	struct dpll_pin *pin;
 	struct netdevsim *ns;
 	enum dpll_pin_direction direction;
+	enum dpll_pin_state state;
 	u64 frequency;
+	u32 prio;
+	s64 phase_offset;
+	s32 phase_adjust;
 };
 
 struct nsim_dpll {
@@ -131,7 +135,6 @@ struct netdevsim {
 	struct nsim_dev *nsim_dev;
 	struct nsim_dev_port *nsim_dev_port;
 	struct mock_phc *phc;
-	struct kobject *ptp_compat_kobj; /* /sys/.../pci_dev/ptp/ for compat */
 	int logical_clk_id;  /* Logical clock ID for PHC sharing (-1 = unique) */
 
 	u64 tx_packets;
@@ -366,6 +369,7 @@ struct nsim_dev {
 	} udp_ports;
 	struct nsim_dev_psample *psample;
 	struct nsim_dpll *dpll;
+	struct kobject *ptp_compat_kobj; /* shared /sys/.../pci_dev/ptp/ */
 	u16 esw_mode;
 };
 
