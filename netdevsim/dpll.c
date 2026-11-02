@@ -73,6 +73,18 @@ static const struct dpll_device_ops nsim_dpll_device_ops = {
 
 /* ---- pin ops ----------------------------------------------------------- */
 
+static int nsim_dpll_pin_frequency_set(DPLL_PIN_CONST struct dpll_pin *pin,
+				       void *pin_priv,
+				       DPLL_DEVICE_CONST struct dpll_device *dpll,
+				       void *dpll_priv, const u64 frequency,
+				       struct netlink_ext_ack *extack)
+{
+	struct nsim_dpll_pin *npin = pin_priv;
+
+	npin->frequency = frequency;
+	return 0;
+}
+
 static int nsim_dpll_pin_frequency_get(DPLL_PIN_CONST struct dpll_pin *pin,
 				       void *pin_priv,
 				       DPLL_DEVICE_CONST struct dpll_device *dpll,
@@ -98,6 +110,19 @@ static int nsim_dpll_pin_direction_get(DPLL_PIN_CONST struct dpll_pin *pin,
 	return 0;
 }
 
+static int nsim_dpll_pin_direction_set(DPLL_PIN_CONST struct dpll_pin *pin,
+				       void *pin_priv,
+				       DPLL_DEVICE_CONST struct dpll_device *dpll,
+				       void *dpll_priv,
+				       const enum dpll_pin_direction direction,
+				       struct netlink_ext_ack *extack)
+{
+	struct nsim_dpll_pin *npin = pin_priv;
+
+	npin->direction = direction;
+	return 0;
+}
+
 static int nsim_dpll_pin_state_on_dpll_get(DPLL_PIN_CONST struct dpll_pin *pin,
 					   void *pin_priv,
 					   DPLL_DEVICE_CONST struct dpll_device *dpll,
@@ -105,7 +130,46 @@ static int nsim_dpll_pin_state_on_dpll_get(DPLL_PIN_CONST struct dpll_pin *pin,
 					   enum dpll_pin_state *state,
 					   struct netlink_ext_ack *extack)
 {
-	*state = DPLL_PIN_STATE_CONNECTED;
+	struct nsim_dpll_pin *npin = pin_priv;
+
+	*state = npin->state;
+	return 0;
+}
+
+static int nsim_dpll_pin_state_on_dpll_set(DPLL_PIN_CONST struct dpll_pin *pin,
+					   void *pin_priv,
+					   DPLL_DEVICE_CONST struct dpll_device *dpll,
+					   void *dpll_priv,
+					   const enum dpll_pin_state state,
+					   struct netlink_ext_ack *extack)
+{
+	struct nsim_dpll_pin *npin = pin_priv;
+
+	npin->state = state;
+	return 0;
+}
+
+static int nsim_dpll_pin_prio_get(DPLL_PIN_CONST struct dpll_pin *pin,
+				  void *pin_priv,
+				  DPLL_DEVICE_CONST struct dpll_device *dpll,
+				  void *dpll_priv, u32 *prio,
+				  struct netlink_ext_ack *extack)
+{
+	struct nsim_dpll_pin *npin = pin_priv;
+
+	*prio = npin->prio;
+	return 0;
+}
+
+static int nsim_dpll_pin_prio_set(DPLL_PIN_CONST struct dpll_pin *pin,
+				  void *pin_priv,
+				  DPLL_DEVICE_CONST struct dpll_device *dpll,
+				  void *dpll_priv, const u32 prio,
+				  struct netlink_ext_ack *extack)
+{
+	struct nsim_dpll_pin *npin = pin_priv;
+
+	npin->prio = prio;
 	return 0;
 }
 
@@ -115,22 +179,62 @@ static int nsim_dpll_pin_phase_offset_get(DPLL_PIN_CONST struct dpll_pin *pin,
 					  void *dpll_priv, s64 *phase_offset,
 					  struct netlink_ext_ack *extack)
 {
-	*phase_offset = 0;
+	struct nsim_dpll_pin *npin = pin_priv;
+
+	*phase_offset = npin->phase_offset;
+	return 0;
+}
+
+static int nsim_dpll_pin_phase_adjust_get(DPLL_PIN_CONST struct dpll_pin *pin,
+					  void *pin_priv,
+					  DPLL_DEVICE_CONST struct dpll_device *dpll,
+					  void *dpll_priv, s32 *phase_adjust,
+					  struct netlink_ext_ack *extack)
+{
+	struct nsim_dpll_pin *npin = pin_priv;
+
+	*phase_adjust = npin->phase_adjust;
+	return 0;
+}
+
+static int nsim_dpll_pin_phase_adjust_set(DPLL_PIN_CONST struct dpll_pin *pin,
+					  void *pin_priv,
+					  DPLL_DEVICE_CONST struct dpll_device *dpll,
+					  void *dpll_priv, const s32 phase_adjust,
+					  struct netlink_ext_ack *extack)
+{
+	struct nsim_dpll_pin *npin = pin_priv;
+
+	npin->phase_adjust = phase_adjust;
 	return 0;
 }
 
 static const struct dpll_pin_ops nsim_dpll_gnss_pin_ops = {
+	.frequency_set	    = nsim_dpll_pin_frequency_set,
 	.frequency_get	    = nsim_dpll_pin_frequency_get,
+	.direction_set	    = nsim_dpll_pin_direction_set,
 	.direction_get	    = nsim_dpll_pin_direction_get,
 	.state_on_dpll_get  = nsim_dpll_pin_state_on_dpll_get,
+	.state_on_dpll_set  = nsim_dpll_pin_state_on_dpll_set,
+	.prio_get	    = nsim_dpll_pin_prio_get,
+	.prio_set	    = nsim_dpll_pin_prio_set,
 	.phase_offset_get   = nsim_dpll_pin_phase_offset_get,
+	.phase_adjust_get   = nsim_dpll_pin_phase_adjust_get,
+	.phase_adjust_set   = nsim_dpll_pin_phase_adjust_set,
 };
 
 static const struct dpll_pin_ops nsim_dpll_rclk_pin_ops = {
+	.frequency_set	    = nsim_dpll_pin_frequency_set,
 	.frequency_get	    = nsim_dpll_pin_frequency_get,
+	.direction_set	    = nsim_dpll_pin_direction_set,
 	.direction_get	    = nsim_dpll_pin_direction_get,
 	.state_on_dpll_get  = nsim_dpll_pin_state_on_dpll_get,
+	.state_on_dpll_set  = nsim_dpll_pin_state_on_dpll_set,
+	.prio_get	    = nsim_dpll_pin_prio_get,
+	.prio_set	    = nsim_dpll_pin_prio_set,
 	.phase_offset_get   = nsim_dpll_pin_phase_offset_get,
+	.phase_adjust_get   = nsim_dpll_pin_phase_adjust_get,
+	.phase_adjust_set   = nsim_dpll_pin_phase_adjust_set,
 };
 
 /* Match gnss-sim default --holdover-timeout (Kind cannot write sysfs).
@@ -833,6 +937,7 @@ int nsim_dpll_init(struct nsim_dev *nsim_dev)
 
 	/* GNSS input pin on PPS DPLL */
 	ndpll->gnss_pin_priv.direction = DPLL_PIN_DIRECTION_INPUT;
+	ndpll->gnss_pin_priv.state = DPLL_PIN_STATE_CONNECTED;
 	ndpll->gnss_pin_priv.frequency = DPLL_PIN_FREQUENCY_1_HZ;
 
 	ndpll->gnss_pin = dpll_pin_get(ndpll->clock_id,
@@ -874,6 +979,7 @@ int nsim_dpll_init(struct nsim_dev *nsim_dev)
 
 			ndpll->ext_pin_privs[i].direction =
 				nsim_dpll_ext_pin_dirs[i];
+			ndpll->ext_pin_privs[i].state = DPLL_PIN_STATE_CONNECTED;
 			ndpll->ext_pin_privs[i].frequency =
 				DPLL_PIN_FREQUENCY_1_HZ;
 
@@ -929,6 +1035,7 @@ int nsim_dpll_init(struct nsim_dev *nsim_dev)
 				goto err_ports_cleanup;
 			}
 			npin->direction = DPLL_PIN_DIRECTION_OUTPUT;
+			npin->state = DPLL_PIN_STATE_CONNECTED;
 			npin->frequency = DPLL_PIN_FREQUENCY_10_MHZ;
 			npin->ns = ns;
 
